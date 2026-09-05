@@ -9,9 +9,10 @@ fidelity. Ridiculous weapons and strange battlefields are welcome when they make
 
 ## Status
 
-Minimal 3D battlefield and development camera. Azimuth now renders a bounded placeholder
-battlefield with visible relief that can be inspected with direct camera controls. It still has no
-gameplay, physics, terrain system, audio content, or networking.
+Placeholder tanks and player entities. Azimuth now renders two distinct, terrain-grounded tank
+placeholders on a bounded battlefield with visible relief. Their player identities, poses, and
+firing origins are deterministic foundations for later projectile work; it still has no firing,
+gameplay physics, movement, turns, audio content, or networking.
 
 ## Prerequisites
 

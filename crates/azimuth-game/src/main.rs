@@ -1,5 +1,9 @@
+mod battlefield;
+mod tank;
+
 use std::f32::consts::FRAC_PI_2;
 
+use battlefield::{HALF_EXTENT, terrain_height};
 use bevy::{
     asset::RenderAssetUsages,
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
@@ -7,8 +11,8 @@ use bevy::{
     prelude::*,
     render::render_resource::PrimitiveTopology,
 };
+use tank::{HorizontalDirection, PlayerId, Tank, initial_tanks};
 
-const BATTLEFIELD_HALF_EXTENT: f32 = 20.0;
 const TERRAIN_CELLS_PER_SIDE: u32 = 20;
 const CAMERA_MIN_DISTANCE: f32 = 8.0;
 const CAMERA_MAX_DISTANCE: f32 = 60.0;
@@ -25,6 +29,9 @@ struct BattlefieldCamera {
     distance: f32,
 }
 
+#[derive(Resource)]
+struct InitialTanks([Tank; 2]);
+
 impl Default for BattlefieldCamera {
     fn default() -> Self {
         Self {
@@ -39,6 +46,7 @@ impl Default for BattlefieldCamera {
 fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
+        .insert_resource(InitialTanks(initial_tanks()))
         .add_systems(Startup, spawn_battlefield_scene)
         .add_systems(Update, (update_battlefield_camera, draw_world_axes))
         .run();
@@ -48,6 +56,7 @@ fn spawn_battlefield_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    tanks: Res<InitialTanks>,
 ) {
     let camera = BattlefieldCamera::default();
     let transform = camera_transform(&camera);
@@ -66,6 +75,99 @@ fn spawn_battlefield_scene(
         },
         Transform::from_rotation(Quat::from_euler(EulerRot::XYZ, -1.0, -0.6, 0.0)),
     ));
+
+    let tank_meshes = TankMeshes {
+        body: meshes.add(Cuboid::new(1.8, 0.8, 2.4)),
+        turret: meshes.add(Cuboid::new(1.2, 0.45, 1.2)),
+        barrel: meshes.add(Cuboid::new(0.18, 0.18, 1.5)),
+        firing_origin_marker: meshes.add(Sphere::new(0.12)),
+    };
+    let player_one_material = materials.add(Color::srgb(0.85, 0.25, 0.18));
+    let player_two_material = materials.add(Color::srgb(0.18, 0.4, 0.85));
+    let firing_origin_material = materials.add(Color::srgb(0.95, 0.85, 0.2));
+
+    for tank in tanks.0.iter().copied() {
+        let material = match tank.owner {
+            PlayerId::One => player_one_material.clone(),
+            PlayerId::Two => player_two_material.clone(),
+        };
+        spawn_tank(
+            &mut commands,
+            tank,
+            &tank_meshes,
+            material,
+            firing_origin_material.clone(),
+        );
+    }
+}
+
+struct TankMeshes {
+    body: Handle<Mesh>,
+    turret: Handle<Mesh>,
+    barrel: Handle<Mesh>,
+    firing_origin_marker: Handle<Mesh>,
+}
+
+fn spawn_tank(
+    commands: &mut Commands,
+    tank: Tank,
+    meshes: &TankMeshes,
+    material: Handle<StandardMaterial>,
+    firing_origin_material: Handle<StandardMaterial>,
+) {
+    let position = tank.pose.position;
+    let firing_origin = tank.firing_origin();
+    let player_name = match tank.owner {
+        PlayerId::One => "Player one tank",
+        PlayerId::Two => "Player two tank",
+    };
+
+    commands
+        .spawn((
+            Name::new(player_name),
+            Transform::from_xyz(position.x, position.y, position.z),
+            Visibility::default(),
+        ))
+        .with_children(|tank_parent| {
+            tank_parent.spawn((
+                Mesh3d(meshes.body.clone()),
+                MeshMaterial3d(material.clone()),
+                direction_transform(tank.pose.body_forward)
+                    .with_translation(Vec3::new(0.0, 0.4, 0.0)),
+            ));
+
+            tank_parent
+                .spawn((
+                    Mesh3d(meshes.turret.clone()),
+                    MeshMaterial3d(material.clone()),
+                    direction_transform(tank.pose.turret_forward)
+                        .with_translation(Vec3::new(0.0, 1.0, 0.0)),
+                ))
+                .with_children(|turret| {
+                    turret.spawn((
+                        Mesh3d(meshes.barrel.clone()),
+                        MeshMaterial3d(material.clone()),
+                        Transform::from_xyz(0.0, 0.0, -1.35),
+                    ));
+                });
+
+            // This marks the derived handoff point for the next projectile feature. It is not a
+            // projectile and does not add firing behaviour to this scene.
+            tank_parent.spawn((
+                Name::new("Firing origin"),
+                Mesh3d(meshes.firing_origin_marker.clone()),
+                MeshMaterial3d(firing_origin_material.clone()),
+                Transform::from_xyz(
+                    firing_origin.x - position.x,
+                    firing_origin.y - position.y,
+                    firing_origin.z - position.z,
+                ),
+            ));
+        });
+}
+
+fn direction_transform(direction: HorizontalDirection) -> Transform {
+    Transform::IDENTITY.looking_to(Vec3::new(direction.x, 0.0, direction.z), Vec3::Y)
 }
 
 fn update_battlefield_camera(
@@ -125,25 +227,21 @@ fn camera_transform(camera: &BattlefieldCamera) -> Transform {
 
 fn clamp_camera_target(target: Vec3) -> Vec3 {
     Vec3::new(
-        target
-            .x
-            .clamp(-BATTLEFIELD_HALF_EXTENT, BATTLEFIELD_HALF_EXTENT),
+        target.x.clamp(-HALF_EXTENT, HALF_EXTENT),
         target.y,
-        target
-            .z
-            .clamp(-BATTLEFIELD_HALF_EXTENT, BATTLEFIELD_HALF_EXTENT),
+        target.z.clamp(-HALF_EXTENT, HALF_EXTENT),
     )
 }
 
 fn create_battlefield_mesh() -> Mesh {
     let cells = TERRAIN_CELLS_PER_SIDE as usize;
-    let step = BATTLEFIELD_HALF_EXTENT * 2.0 / TERRAIN_CELLS_PER_SIDE as f32;
+    let step = HALF_EXTENT * 2.0 / TERRAIN_CELLS_PER_SIDE as f32;
     let mut positions = Vec::with_capacity((cells + 1) * (cells + 1));
 
     for z_index in 0..=cells {
         for x_index in 0..=cells {
-            let x = -BATTLEFIELD_HALF_EXTENT + x_index as f32 * step;
-            let z = -BATTLEFIELD_HALF_EXTENT + z_index as f32 * step;
+            let x = -HALF_EXTENT + x_index as f32 * step;
+            let z = -HALF_EXTENT + z_index as f32 * step;
             positions.push([x, terrain_height(x, z), z]);
         }
     }
@@ -176,11 +274,6 @@ fn create_battlefield_mesh() -> Mesh {
     .with_computed_smooth_normals()
 }
 
-fn terrain_height(x: f32, z: f32) -> f32 {
-    // This is deliberately visual relief, not the beginning of Azimuth's terrain model.
-    1.8 * (x * 0.16).sin() * (z * 0.13).cos() + z * 0.08
-}
-
 fn draw_world_axes(mut gizmos: Gizmos) {
     gizmos.axes(Transform::IDENTITY, 3.0);
 }
@@ -190,16 +283,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terrain_height_is_deterministic_and_non_flat() {
-        assert_eq!(terrain_height(4.0, -7.0), terrain_height(4.0, -7.0));
-        assert_ne!(terrain_height(0.0, 0.0), terrain_height(8.0, 8.0));
-    }
-
-    #[test]
     fn battlefield_camera_target_stays_within_visible_bounds() {
         assert_eq!(
             clamp_camera_target(Vec3::new(30.0, 0.0, -30.0)),
-            Vec3::new(BATTLEFIELD_HALF_EXTENT, 0.0, -BATTLEFIELD_HALF_EXTENT)
+            Vec3::new(HALF_EXTENT, 0.0, -HALF_EXTENT)
         );
     }
 }

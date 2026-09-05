@@ -19,7 +19,7 @@ These milestones represent the current intended development path.
 * [x] Establish the Rust workspace and repository foundation.
 * [x] Select the initial rendering/game technology deliberately.
 * [x] Render a minimal 3D battlefield.
-* [ ] Render two placeholder tanks/entities.
+* [x] Render two placeholder tanks/entities.
 * [ ] Launch a projectile through a configurable gravity field.
 * [ ] Detect projectile impact with the battlefield.
 * [ ] Produce a visible impact/explosion.
@@ -111,7 +111,7 @@ Selection of rendering/game technology should be an explicit architectural decis
 * [x] Establish a controllable 3D camera.
 * [x] Render a simple ground plane.
 * [x] Render simple placeholder battlefield geometry.
-* [ ] Render simple placeholder tank/player geometry.
+* [x] Render simple placeholder tank/player geometry.
 * [ ] Render a projectile.
 * [x] Establish basic debug visualisation capabilities.
 
@@ -279,8 +279,8 @@ Terrain should affect both aiming and tactical position.
 * [x] Render non-flat terrain.
 * [x] Support meaningful elevation changes.
 * [ ] Detect projectile intersection with terrain.
-* [ ] Position tanks correctly on terrain.
-* [ ] Determine local terrain height.
+* [x] Position tanks correctly on terrain.
+* [x] Determine local terrain height.
 * [ ] Determine local terrain slope.
 * [x] Establish battlefield boundaries.
 
@@ -352,13 +352,13 @@ Tanks should initially be simple game pieces rather than realistic vehicles.
 
 ## Basic Tank Representation
 
-* [ ] Represent player position.
-* [ ] Represent player orientation.
-* [ ] Represent turret orientation.
-* [ ] Represent weapon launch position.
-* [ ] Place tanks correctly on battlefield terrain.
-* [ ] Render a simple tank placeholder.
-* [ ] Associate player identity with a tank.
+* [x] Represent player position.
+* [x] Represent player orientation.
+* [x] Represent turret orientation.
+* [x] Represent weapon launch position.
+* [x] Place tanks correctly on battlefield terrain.
+* [x] Render a simple tank placeholder.
+* [x] Associate player identity with a tank.
 
 ## Damage / Survival
 
