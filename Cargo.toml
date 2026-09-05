@@ -1,0 +1,3 @@
+[workspace]
+members = ["crates/azimuth-game"]
+resolver = "3"

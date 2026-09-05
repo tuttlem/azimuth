@@ -16,7 +16,7 @@ Completed work should be checked off as its acceptance criteria are satisfied.
 
 These milestones represent the current intended development path.
 
-* [ ] Establish the Rust workspace and repository foundation.
+* [x] Establish the Rust workspace and repository foundation.
 * [ ] Select the initial rendering/game technology deliberately.
 * [ ] Render a minimal 3D battlefield.
 * [ ] Render two placeholder tanks/entities.
@@ -39,43 +39,47 @@ The first major gameplay target is:
 
 ## Repository and Workspace
 
-* [ ] Establish Azimuth as a Rust Cargo workspace.
-* [ ] Establish an initial minimal crate structure based on demonstrated architectural boundaries.
-* [ ] Ensure workspace structure remains easy to understand and navigate.
-* [ ] Add appropriate `.gitignore`.
-* [ ] Establish a useful root `README.md`.
-* [ ] Document how to build and run the project.
-* [ ] Document how to run tests and quality checks.
-* [ ] Establish workspace-wide development commands where useful.
+* [x] Establish Azimuth as a Rust Cargo workspace.
+* [x] Establish an initial minimal crate structure based on demonstrated architectural boundaries.
+* [x] Ensure workspace structure remains easy to understand and navigate.
+* [x] Add appropriate `.gitignore`.
+* [x] Establish a useful root `README.md`.
+* [x] Document how to build and run the project.
+* [x] Document how to run tests and quality checks.
+* [x] Establish workspace-wide development commands where useful.
 
 ## Rust Tooling
 
-* [ ] Establish the supported Rust toolchain policy.
-* [ ] Configure `rustfmt`.
-* [ ] Configure Clippy.
-* [ ] Establish workspace-wide build validation.
-* [ ] Establish workspace-wide test validation.
-* [ ] Establish workspace-wide lint validation.
-* [ ] Ensure warnings are treated intentionally rather than ignored.
-* [ ] Avoid unnecessary dependencies during foundation work.
+* [x] Establish the supported Rust toolchain policy.
+* [x] Configure `rustfmt`.
+* [x] Configure Clippy.
+* [x] Establish workspace-wide build validation.
+* [x] Establish workspace-wide test validation.
+* [x] Establish workspace-wide lint validation.
+* [x] Ensure warnings are treated intentionally rather than ignored.
+* [x] Avoid unnecessary dependencies during foundation work.
 
 ## Testing Foundation
 
-* [ ] Establish unit testing conventions.
-* [ ] Establish integration testing conventions where needed.
-* [ ] Establish deterministic test patterns for simulation code.
-* [ ] Introduce shared testing infrastructure only when real duplication demonstrates a need.
-* [ ] Document how regression tests should be added for discovered gameplay bugs.
+* [x] Establish unit testing conventions.
+* [x] Establish integration testing conventions where needed.
+* [x] Establish deterministic test patterns for simulation code.
+* [x] Introduce shared testing infrastructure only when real duplication demonstrates a need.
+* [x] Document how regression tests should be added for discovered gameplay bugs.
 
 ## Documentation
 
-* [ ] Create `docs/roadmap.md`.
-* [ ] Maintain `docs/specs/` as the location for SpecKit specifications.
-* [ ] Preserve timestamp-based specification naming.
-* [ ] Document relevant developer workflow guidance.
-* [ ] Keep architecture documentation lightweight and current.
+* [x] Create `docs/roadmap.md`.
+* [x] Maintain `docs/specs/` as the location for SpecKit specifications.
+* [x] Preserve timestamp-based specification naming.
+* [x] Document relevant developer workflow guidance.
+* [x] Keep architecture documentation lightweight and current.
 
 ## Automation / CI
+
+CI was evaluated during the Project Foundation work and deliberately deferred. Direct local Cargo
+checks currently provide the needed repository-health feedback; revisit CI when hosting or
+collaboration needs create a concrete benefit.
 
 * [ ] Decide whether CI is useful at the current project stage.
 * [ ] Add automated build validation if justified.
