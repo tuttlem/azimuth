@@ -26,7 +26,8 @@ These milestones represent the current intended development path.
 * [x] Deform terrain at the impact point.
 * [x] Add basic aiming controls: azimuth, elevation, and power.
 * [x] Implement a minimal turn loop.
-* [ ] Implement the move-or-fire decision.
+* [x] Implement the move-or-fire decision.
+* [ ] Improve tactical controls and add presentation-only camera transitions.
 * [ ] Reach the first genuinely playable human-vs-human artillery match.
 
 The first major gameplay target is:
@@ -281,7 +282,7 @@ Terrain should affect both aiming and tactical position.
 * [x] Detect projectile intersection with terrain.
 * [x] Position tanks correctly on terrain.
 * [x] Determine local terrain height.
-* [ ] Determine local terrain slope.
+* [x] Determine local terrain slope.
 * [x] Establish battlefield boundaries.
 
 ## Terrain Generation
@@ -401,6 +402,8 @@ Aiming is the player's primary interaction with the physics system.
 * [x] Clearly present current aiming values.
 * [x] Provide sufficiently fine aiming control.
 * [x] Provide sufficiently fast coarse adjustment.
+* [ ] Remap aiming to directional keys and power keys that remain clear after manual camera panning is retired.
+* [ ] Support held-key repeat for deliberate aim adjustments without making aiming automatic.
 
 ## Aiming Feedback
 
@@ -420,7 +423,7 @@ Aiming is the player's primary interaction with the physics system.
 * [x] Preserve the ability to bracket shots.
 * [x] Reward learning previous shot results.
 * [x] Make changes in power/elevation produce understandable effects.
-* [ ] Make movement capable of disrupting established firing solutions.
+* [x] Make movement capable of disrupting established firing solutions.
 * [ ] Keep aiming satisfying without requiring external calculation.
 
 ---
@@ -445,10 +448,10 @@ The intended core tactical choice is:
 **move OR fire**
 
 * [x] Implement fire as a primary turn action.
-* [ ] Implement movement as a primary turn action.
-* [ ] Prevent normal movement and firing during the same turn.
+* [x] Implement movement as a primary turn action.
+* [x] Prevent normal movement and firing during the same turn.
 * [ ] Allow the design to revisit this rule if playtesting shows a better alternative.
-* [ ] Make the choice clear in the UI.
+* [x] Make the choice clear in the UI.
 
 ## Turn Resolution
 
@@ -466,20 +469,20 @@ Movement creates positional tactics and breaks established firing solutions.
 
 ## Basic Movement
 
-* [ ] Establish movement allowance.
-* [ ] Allow player-controlled repositioning.
-* [ ] Restrict movement by terrain.
-* [ ] Prevent movement through impassable slopes.
-* [ ] Prevent movement outside battlefield bounds.
-* [ ] Resolve final tank orientation and position.
-* [ ] Ensure movement remains turn-based and deliberate.
+* [x] Establish movement allowance.
+* [x] Allow player-controlled repositioning.
+* [x] Restrict movement by terrain.
+* [x] Prevent movement through impassable slopes.
+* [x] Prevent movement outside battlefield bounds.
+* [x] Resolve final tank orientation and position.
+* [x] Ensure movement remains turn-based and deliberate.
 
 ## Movement Model
 
-* [ ] Decide between continuous movement and grid/tile/step-based movement.
-* [ ] Evaluate movement readability.
-* [ ] Evaluate whether distance, slope, or terrain should consume movement allowance.
-* [ ] Ensure movement does not become a vehicle-driving subgame.
+* [x] Decide between continuous movement and grid/tile/step-based movement.
+* [x] Evaluate movement readability.
+* [x] Evaluate whether distance, slope, or terrain should consume movement allowance.
+* [x] Ensure movement does not become a vehicle-driving subgame.
 
 ## Tactical Movement
 
@@ -764,11 +767,14 @@ Watching the shot is part of the game.
 * [x] Zoom.
 * [ ] Focus current player.
 * [ ] Focus selected target area where useful.
+* [ ] Transition behind the active player's tank when that player's turn begins.
+* [ ] Retire manual keyboard camera panning when its keys are needed for tactical controls.
 
 ## Projectile Camera
 
 * [ ] Track projectile in flight.
 * [ ] Maintain awareness of surrounding terrain.
+* [ ] Pull back to a readable general battlefield view when a projectile launches.
 * [ ] Transition naturally toward impact.
 * [ ] Avoid nausea-inducing camera behaviour.
 * [ ] Allow player to skip or accelerate long trajectories eventually if necessary.
@@ -780,6 +786,14 @@ Watching the shot is part of the game.
 * [ ] Show affected players.
 * [ ] Show terrain deformation.
 * [ ] Return clearly to the next player's perspective.
+
+## Tactical Camera and Repeating Controls — Next Feature
+
+The next bounded follow-up should pair the new tactical controls with camera behaviour: directional
+aim controls, power keys, held-key repeat, transition behind the active tank, pullback during shot
+flight, and return to the next player after authoritative resolution. Camera timing must remain
+presentation-only: it must not delay firing, movement, projectile simulation, terrain deformation,
+or turn advancement.
 
 ---
 
@@ -796,7 +810,7 @@ Watching the shot is part of the game.
 * [ ] Gravity.
 * [ ] Atmospheric information where relevant.
 * [ ] Health.
-* [ ] Movement allowance where relevant.
+* [x] Movement allowance where relevant.
 
 ## Match HUD
 

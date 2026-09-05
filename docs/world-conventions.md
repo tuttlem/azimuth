@@ -49,3 +49,20 @@ They describe Azimuth's game world rather than a rendering API's coordinate nami
 
 See [projectile-model.md](projectile-model.md) for the deterministic fixed-step motion model and
 development defaults.
+
+## Tactical Movement
+
+- At the start of a turn, the current player chooses one primary action: Space starts the existing
+  firing action, while M starts movement. The player cannot normally move and fire in one turn.
+- A movement action starts with six one-unit cardinal requests: I is negative Z, J is negative X,
+  K is positive Z, and L is positive X. Enter ends movement early and forfeits unused requests.
+  This request-based model is deterministic and deliberately does not use render-frame duration.
+- A requested destination must remain within the battlefield and differ from the current terrain
+  surface at the starting horizontal position by no more than 0.75 units. Valid movement sets the
+  tank base exactly to the current terrain height at its destination; invalid movement changes no
+  pose, body direction, or allowance.
+- The tank body faces its most recent accepted movement direction. Turret azimuth, elevation, and
+  power remain retained player values, so a later shot begins at the new tank position without
+  automatic aim compensation.
+- Terrain deformation is the sole source of movement height and passability. Tanks intentionally
+  do not settle after later impacts below a stationary pose; that remains separate work.

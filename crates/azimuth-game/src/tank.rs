@@ -3,6 +3,9 @@ use crate::world::{WorldPosition, WorldVector};
 
 const FIRING_ORIGIN_FORWARD_OFFSET: f32 = 2.1;
 const FIRING_ORIGIN_HEIGHT: f32 = 1.0;
+pub const MOVEMENT_STEP_DISTANCE: f32 = 1.0;
+pub const MOVEMENT_ALLOWANCE: u8 = 6;
+pub const MAX_MOVEMENT_ELEVATION_CHANGE: f32 = 0.75;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TankFiringRepresentation {
@@ -15,6 +18,36 @@ pub struct TankFiringRepresentation {
 pub enum PlayerId {
     One,
     Two,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MovementDirection {
+    NegativeZ,
+    NegativeX,
+    PositiveZ,
+    PositiveX,
+}
+
+impl MovementDirection {
+    pub fn horizontal_offset(self) -> (f32, f32) {
+        match self {
+            Self::NegativeZ => (0.0, -MOVEMENT_STEP_DISTANCE),
+            Self::NegativeX => (-MOVEMENT_STEP_DISTANCE, 0.0),
+            Self::PositiveZ => (0.0, MOVEMENT_STEP_DISTANCE),
+            Self::PositiveX => (MOVEMENT_STEP_DISTANCE, 0.0),
+        }
+    }
+
+    pub fn horizontal_direction(self) -> HorizontalDirection {
+        let (x, z) = self.horizontal_offset();
+        HorizontalDirection::new(x, z)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MovementRejection {
+    Bounds,
+    Slope,
 }
 
 impl PlayerId {
@@ -113,6 +146,39 @@ impl Tank {
             muzzle_position: barrel_pivot
                 .translated(direction.scaled(FIRING_ORIGIN_FORWARD_OFFSET)),
         }
+    }
+
+    /// Produces a new tank pose only when the adjacent current terrain position is in bounds and
+    /// passable. The caller owns the action allowance, so rejected terrain requests never mutate
+    /// this tank and an accepted result can be committed before one allowance is consumed.
+    pub fn step_on_terrain(
+        self,
+        terrain: &BattlefieldTerrain,
+        direction: MovementDirection,
+    ) -> Result<Self, MovementRejection> {
+        let (offset_x, offset_z) = direction.horizontal_offset();
+        let destination_x = self.pose.position.x + offset_x;
+        let destination_z = self.pose.position.z + offset_z;
+        let Some(elevation_change) = terrain.elevation_change_if_within_bounds(
+            self.pose.position.x,
+            self.pose.position.z,
+            destination_x,
+            destination_z,
+        ) else {
+            return Err(MovementRejection::Bounds);
+        };
+        if elevation_change > MAX_MOVEMENT_ELEVATION_CHANGE {
+            return Err(MovementRejection::Slope);
+        }
+
+        let mut moved = self;
+        moved.pose.position = WorldPosition {
+            x: destination_x,
+            y: terrain.height(destination_x, destination_z),
+            z: destination_z,
+        };
+        moved.pose.body_forward = direction.horizontal_direction();
+        Ok(moved)
     }
 }
 
@@ -299,5 +365,92 @@ mod tests {
             .abs()
                 < 0.000_1
         );
+    }
+
+    #[test]
+    fn movement_directions_are_one_unit_cardinal_steps() {
+        assert_eq!(
+            MovementDirection::NegativeZ.horizontal_offset(),
+            (0.0, -1.0)
+        );
+        assert_eq!(
+            MovementDirection::NegativeX.horizontal_offset(),
+            (-1.0, 0.0)
+        );
+        assert_eq!(MovementDirection::PositiveZ.horizontal_offset(), (0.0, 1.0));
+        assert_eq!(MovementDirection::PositiveX.horizontal_offset(), (1.0, 0.0));
+        assert_eq!(MOVEMENT_ALLOWANCE, 6);
+        assert!(MAX_MOVEMENT_ELEVATION_CHANGE.is_finite());
+    }
+
+    #[test]
+    fn accepted_step_follows_current_terrain_and_changes_only_body_direction() {
+        let terrain = BattlefieldTerrain::initial();
+        let tank = initial_tanks(&terrain)[0];
+        let moved = tank
+            .step_on_terrain(&terrain, MovementDirection::PositiveX)
+            .unwrap();
+
+        assert_eq!(moved.pose.position.x, tank.pose.position.x + 1.0);
+        assert_eq!(moved.pose.position.z, tank.pose.position.z);
+        assert_eq!(
+            moved.pose.position.y,
+            terrain.height(moved.pose.position.x, moved.pose.position.z)
+        );
+        assert_eq!(moved.pose.turret_forward, tank.pose.turret_forward);
+        assert_eq!(
+            moved.pose.body_forward,
+            MovementDirection::PositiveX.horizontal_direction()
+        );
+    }
+
+    #[test]
+    fn movement_rejections_preserve_the_original_tank() {
+        let terrain = BattlefieldTerrain::initial();
+        let mut tank = initial_tanks(&terrain)[0];
+        tank.pose.position.x = 20.0;
+        tank.pose.position.y = terrain.height(20.0, tank.pose.position.z);
+        let before = tank;
+
+        assert_eq!(
+            tank.step_on_terrain(&terrain, MovementDirection::PositiveX),
+            Err(MovementRejection::Bounds)
+        );
+        assert_eq!(tank, before);
+    }
+
+    #[test]
+    fn deformed_terrain_is_grounded_when_passable_and_rejected_when_too_steep() {
+        let mut terrain = BattlefieldTerrain::initial();
+        let tank = initial_tanks(&terrain)[0];
+        let impact = WorldPosition {
+            x: tank.pose.position.x + 1.0,
+            y: 0.0,
+            z: tank.pose.position.z,
+        };
+        terrain.apply_crater(impact, crate::battlefield::Crater::default_development());
+        let moved = tank
+            .step_on_terrain(&terrain, MovementDirection::PositiveX)
+            .unwrap();
+        assert_eq!(
+            moved.pose.position.y,
+            terrain.height(moved.pose.position.x, moved.pose.position.z)
+        );
+
+        let mut steep_terrain = BattlefieldTerrain::initial();
+        steep_terrain.apply_crater(
+            WorldPosition {
+                x: tank.pose.position.x,
+                y: 0.0,
+                z: tank.pose.position.z,
+            },
+            crate::battlefield::Crater::new(1.5, 4.0).unwrap(),
+        );
+        let before = tank;
+        assert_eq!(
+            tank.step_on_terrain(&steep_terrain, MovementDirection::PositiveX),
+            Err(MovementRejection::Slope)
+        );
+        assert_eq!(tank, before);
     }
 }

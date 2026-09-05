@@ -84,6 +84,23 @@ impl BattlefieldTerrain {
         is_within_bounds(x, z).then(|| self.height(x, z))
     }
 
+    /// Returns the absolute current-surface elevation change between two in-bounds horizontal
+    /// positions. Movement uses this rather than a tank's stored Y coordinate because a later
+    /// crater may have changed terrain below a stationary tank that intentionally has not settled.
+    pub fn elevation_change_if_within_bounds(
+        &self,
+        start_x: f32,
+        start_z: f32,
+        end_x: f32,
+        end_z: f32,
+    ) -> Option<f32> {
+        Some(
+            (self.height_if_within_bounds(end_x, end_z)?
+                - self.height_if_within_bounds(start_x, start_z)?)
+            .abs(),
+        )
+    }
+
     /// Lowers current vertices by a smooth bowl. The squared remaining fraction reaches zero at
     /// the radius, so adjacent unaffected terrain joins without a hard deformation edge.
     pub fn apply_crater(&mut self, centre: WorldPosition, crater: Crater) {
@@ -250,5 +267,47 @@ mod tests {
     fn invalid_craters_are_rejected() {
         assert_eq!(Crater::new(0.0, 1.0), Err(CraterError::Radius));
         assert_eq!(Crater::new(1.0, f32::NAN), Err(CraterError::Depth));
+    }
+
+    #[test]
+    fn elevation_change_uses_current_deformed_surface_and_rejects_bounds() {
+        let mut terrain = BattlefieldTerrain::initial();
+        let before = terrain
+            .elevation_change_if_within_bounds(0.0, 0.0, 1.0, 0.0)
+            .unwrap();
+        terrain.apply_crater(centre(), Crater::default_development());
+        let after = terrain
+            .elevation_change_if_within_bounds(0.0, 0.0, 1.0, 0.0)
+            .unwrap();
+
+        assert_ne!(before, after);
+        assert!(
+            terrain
+                .elevation_change_if_within_bounds(HALF_EXTENT, 0.0, HALF_EXTENT + 1.0, 0.0)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn narrow_deep_crater_produces_a_repeatable_impassable_step() {
+        let start = WorldPosition {
+            x: -12.0,
+            y: 0.0,
+            z: -8.0,
+        };
+        let mut first = BattlefieldTerrain::initial();
+        let mut second = BattlefieldTerrain::initial();
+        let crater = Crater::new(1.5, 4.0).unwrap();
+        first.apply_crater(start, crater);
+        second.apply_crater(start, crater);
+
+        let first_change = first
+            .elevation_change_if_within_bounds(start.x, start.z, start.x + 1.0, start.z)
+            .unwrap();
+        let second_change = second
+            .elevation_change_if_within_bounds(start.x, start.z, start.x + 1.0, start.z)
+            .unwrap();
+        assert_eq!(first_change, second_change);
+        assert!(first_change > crate::tank::MAX_MOVEMENT_ELEVATION_CHANGE);
     }
 }

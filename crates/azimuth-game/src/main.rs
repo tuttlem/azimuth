@@ -20,7 +20,10 @@ use projectile::{
     Gravity, Projectile, ProjectileAdvance, SimulationLimits, TerrainImpact,
     azimuth_from_horizontal_direction,
 };
-use tank::{HorizontalDirection, PlayerId, Tank, TankFiringRepresentation, initial_tanks};
+use tank::{
+    HorizontalDirection, MovementDirection, MovementRejection, PlayerId, Tank,
+    TankFiringRepresentation, initial_tanks,
+};
 use turn::{TurnPhase, TurnState};
 use world::WorldPosition;
 
@@ -45,7 +48,7 @@ struct BattlefieldCamera {
 }
 
 #[derive(Resource)]
-struct InitialTanks([Tank; 2]);
+struct Tanks([Tank; 2]);
 
 #[derive(Resource)]
 struct CurrentTurn(TurnState);
@@ -66,6 +69,9 @@ struct CurrentImpactExplosionConsumed(bool);
 
 #[derive(Resource)]
 struct BattlefieldGravity(Gravity);
+
+#[derive(Resource, Default)]
+struct MovementFeedback(Option<MovementRejection>);
 
 #[derive(Resource)]
 struct ProjectileVisualAssets {
@@ -101,6 +107,12 @@ struct ExplosionVisual {
 
 #[derive(Component)]
 struct TankTurret(PlayerId);
+
+#[derive(Component)]
+struct TankVisual(PlayerId);
+
+#[derive(Component)]
+struct TankBody(PlayerId);
 
 #[derive(Component)]
 struct TankBarrel(PlayerId);
@@ -147,12 +159,13 @@ fn main() {
     let turn = initial_turn_state(tanks);
     App::new()
         .add_plugins(DefaultPlugins)
-        .insert_resource(InitialTanks(tanks))
+        .insert_resource(Tanks(tanks))
         .insert_resource(CurrentTurn(turn))
         .insert_resource(BattlefieldState(terrain))
         .insert_resource(ProjectileFlight::default())
         .insert_resource(LatestTerrainImpact::default())
         .insert_resource(CurrentImpactExplosionConsumed::default())
+        .insert_resource(MovementFeedback::default())
         .insert_resource(BattlefieldGravity(
             Gravity::new(DEVELOPMENT_GRAVITY).expect("development gravity must be valid"),
         ))
@@ -162,7 +175,10 @@ fn main() {
             Update,
             (
                 update_battlefield_camera,
+                select_movement_action,
                 update_aiming_input,
+                update_movement_input,
+                sync_tank_pose,
                 sync_tank_aim,
                 launch_aimed_projectile,
                 sync_aiming_hud,
@@ -183,7 +199,7 @@ fn spawn_battlefield_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    tanks: Res<InitialTanks>,
+    tanks: Res<Tanks>,
     turn: Res<CurrentTurn>,
     terrain: Res<BattlefieldState>,
 ) {
@@ -233,11 +249,7 @@ fn spawn_battlefield_scene(
 
     commands.spawn((
         AimingHud,
-        Text::new(format_aiming_hud(
-            turn.0.current_player,
-            turn.0.current_aim(),
-            turn.0.phase,
-        )),
+        Text::new(format_aiming_hud(turn.0, None)),
         TextFont {
             font_size: 22.0,
             ..default()
@@ -271,7 +283,7 @@ fn spawn_battlefield_scene(
 
 fn launch_aimed_projectile(
     keyboard: Res<ButtonInput<KeyCode>>,
-    tanks: Res<InitialTanks>,
+    tanks: Res<Tanks>,
     assets: Res<ProjectileVisualAssets>,
     mut flight: ResMut<ProjectileFlight>,
     mut latest_impact: ResMut<LatestTerrainImpact>,
@@ -300,12 +312,70 @@ fn launch_aimed_projectile(
     latest_impact.0 = None;
 }
 
+fn select_movement_action(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut feedback: ResMut<MovementFeedback>,
+    mut turn: ResMut<CurrentTurn>,
+) {
+    if keyboard.just_pressed(KeyCode::KeyM) && turn.0.begin_movement() {
+        feedback.0 = None;
+    }
+}
+
+fn update_movement_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    terrain: Res<BattlefieldState>,
+    mut tanks: ResMut<Tanks>,
+    mut feedback: ResMut<MovementFeedback>,
+    mut turn: ResMut<CurrentTurn>,
+) {
+    if turn.0.remaining_movement().is_none() {
+        return;
+    }
+    if keyboard.just_pressed(KeyCode::Enter) {
+        if turn.0.finish_movement() {
+            feedback.0 = None;
+        }
+        return;
+    }
+    let Some(direction) = movement_direction(&keyboard) else {
+        return;
+    };
+    let player = turn.0.current_player;
+    let tank = tank_for_player(tanks.0, player);
+    match tank.step_on_terrain(&terrain.0, direction) {
+        Ok(moved) => {
+            *tank_for_player_mut(&mut tanks.0, player) = moved;
+            assert!(
+                turn.0.accept_movement_step(),
+                "moving turn must consume accepted step"
+            );
+            feedback.0 = None;
+        }
+        Err(rejection) => feedback.0 = Some(rejection),
+    }
+}
+
+fn movement_direction(keyboard: &ButtonInput<KeyCode>) -> Option<MovementDirection> {
+    let directions = [
+        (KeyCode::KeyI, MovementDirection::NegativeZ),
+        (KeyCode::KeyJ, MovementDirection::NegativeX),
+        (KeyCode::KeyK, MovementDirection::PositiveZ),
+        (KeyCode::KeyL, MovementDirection::PositiveX),
+    ];
+    let mut requested = directions
+        .into_iter()
+        .filter_map(|(key, direction)| keyboard.just_pressed(key).then_some(direction));
+    let direction = requested.next()?;
+    requested.next().is_none().then_some(direction)
+}
+
 fn update_aiming_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     flight: Res<ProjectileFlight>,
     mut turn: ResMut<CurrentTurn>,
 ) {
-    if flight.0.is_some() || turn.0.phase != TurnPhase::Ready {
+    if flight.0.is_some() || turn.0.phase != TurnPhase::Choosing {
         return;
     }
 
@@ -396,8 +466,15 @@ fn tank_for_player(tanks: [Tank; 2], player: PlayerId) -> Tank {
         .expect("each current player must own one initial tank")
 }
 
+fn tank_for_player_mut(tanks: &mut [Tank; 2], player: PlayerId) -> &mut Tank {
+    tanks
+        .iter_mut()
+        .find(|tank| tank.owner == player)
+        .expect("each current player must own one tank")
+}
+
 fn sync_tank_aim(
-    tanks: Res<InitialTanks>,
+    tanks: Res<Tanks>,
     turn: Res<CurrentTurn>,
     mut turrets: TankTurretTransforms,
     mut barrels: TankBarrelTransforms,
@@ -429,21 +506,50 @@ fn sync_tank_aim(
     }
 }
 
-fn sync_aiming_hud(turn: Res<CurrentTurn>, mut hud: Single<&mut Text, With<AimingHud>>) {
-    hud.0 = format_aiming_hud(turn.0.current_player, turn.0.current_aim(), turn.0.phase);
+fn sync_tank_pose(
+    tanks: Res<Tanks>,
+    mut roots: Query<(&TankVisual, &mut Transform), Without<TankBody>>,
+    mut bodies: Query<(&TankBody, &mut Transform), Without<TankVisual>>,
+) {
+    for (owner, mut transform) in &mut roots {
+        let position = tank_for_player(tanks.0, owner.0).pose.position;
+        transform.translation = to_bevy_position(position);
+    }
+    for (owner, mut transform) in &mut bodies {
+        let tank = tank_for_player(tanks.0, owner.0);
+        *transform =
+            direction_transform(tank.pose.body_forward).with_translation(Vec3::new(0.0, 0.4, 0.0));
+    }
 }
 
-fn format_aiming_hud(player: PlayerId, aiming: AimingState, phase: TurnPhase) -> String {
-    let status = match phase {
-        TurnPhase::Ready => {
-            "READY — Q/E azimuth, R/F elevation, T/G power, Shift coarse, Space fire"
+fn sync_aiming_hud(
+    turn: Res<CurrentTurn>,
+    feedback: Res<MovementFeedback>,
+    mut hud: Single<&mut Text, With<AimingHud>>,
+) {
+    hud.0 = format_aiming_hud(turn.0, feedback.0);
+}
+
+fn format_aiming_hud(turn: TurnState, feedback: Option<MovementRejection>) -> String {
+    let status = match turn.phase {
+        TurnPhase::Choosing => {
+            "CHOOSE ACTION — Q/E azimuth, R/F elevation, T/G power, Shift coarse, Space fire, M move".to_owned()
         }
-        TurnPhase::Resolving => "RESOLVING SHOT — aiming locked",
+        TurnPhase::Moving { remaining_steps } => {
+            let rejection = match feedback {
+                Some(MovementRejection::Bounds) => " — blocked: battlefield edge",
+                Some(MovementRejection::Slope) => " — blocked: terrain too steep",
+                None => "",
+            };
+            format!("MOVING — {remaining_steps} steps left — I/J/K/L move, Enter finish{rejection}")
+        }
+        TurnPhase::ResolvingFire => "RESOLVING SHOT — action locked".to_owned(),
     };
-    let player_name = match player {
+    let player_name = match turn.current_player {
         PlayerId::One => "Player One",
         PlayerId::Two => "Player Two",
     };
+    let aiming = turn.current_aim();
     format!(
         "{player_name}\nAzimuth: {:.0}°\nElevation: {:.0}°\nPower: {:.1} units/s\n{status}",
         aiming.azimuth_degrees, aiming.elevation_degrees, aiming.launch_speed,
@@ -652,6 +758,7 @@ fn spawn_tank(
     commands
         .spawn((
             Name::new(player_name),
+            TankVisual(tank.owner),
             Transform::from_xyz(position.x, position.y, position.z),
             Visibility::default(),
         ))
@@ -661,6 +768,7 @@ fn spawn_tank(
                 MeshMaterial3d(material.clone()),
                 direction_transform(tank.pose.body_forward)
                     .with_translation(Vec3::new(0.0, 0.4, 0.0)),
+                TankBody(tank.owner),
             ));
 
             let mut turret_entity = tank_parent.spawn((
@@ -912,6 +1020,48 @@ mod tests {
     }
 
     #[test]
+    fn movement_keeps_aim_but_changes_the_later_launch_position() {
+        let terrain = BattlefieldTerrain::initial();
+        let mut tanks = initial_tanks(&terrain);
+        let mut turn = initial_turn_state(tanks);
+        turn.apply_current_aim(AimAdjustment::AzimuthIncrease, false);
+        let retained_aim = turn.current_aim();
+        let before = launch_parameters_for_aim(tanks[0], retained_aim);
+
+        let moved = tanks[0]
+            .step_on_terrain(&terrain, MovementDirection::PositiveX)
+            .unwrap();
+        tanks[0] = moved;
+        assert!(turn.begin_movement());
+        assert!(turn.accept_movement_step());
+        assert!(turn.finish_movement());
+        assert!(turn.begin_fire().is_some());
+        assert!(turn.complete_resolution());
+
+        assert_eq!(turn.current_aim(), retained_aim);
+        let after = launch_parameters_for_aim(tanks[0], turn.current_aim());
+        assert_eq!(after.azimuth_degrees, before.azimuth_degrees);
+        assert_eq!(after.elevation_degrees, before.elevation_degrees);
+        assert_eq!(after.launch_speed, before.launch_speed);
+        assert_ne!(after.launch_position, before.launch_position);
+    }
+
+    #[test]
+    fn moving_one_players_tank_leaves_the_other_tank_unchanged() {
+        let terrain = BattlefieldTerrain::initial();
+        let mut tanks = initial_tanks(&terrain);
+        let player_two_before = tank_for_player(tanks, PlayerId::Two);
+        let moved = tank_for_player(tanks, PlayerId::One)
+            .step_on_terrain(&terrain, MovementDirection::PositiveX)
+            .unwrap();
+
+        *tank_for_player_mut(&mut tanks, PlayerId::One) = moved;
+
+        assert_eq!(tank_for_player(tanks, PlayerId::One), moved);
+        assert_eq!(tank_for_player(tanks, PlayerId::Two), player_two_before);
+    }
+
+    #[test]
     fn projectile_resolution_keeps_active_turn_then_applies_crater_before_handoff() {
         let mut terrain = BattlefieldTerrain::initial();
         let mut impact = None;
@@ -937,7 +1087,7 @@ mod tests {
         );
         assert!(active.is_some());
         assert_eq!(turn.current_player, PlayerId::One);
-        assert_eq!(turn.phase, TurnPhase::Resolving);
+        assert_eq!(turn.phase, TurnPhase::ResolvingFire);
 
         let before = terrain.height(0.0, 0.0);
         let resolved = resolve_projectile_advance(
@@ -957,7 +1107,7 @@ mod tests {
         assert_eq!(impact.unwrap().position.y, before);
         assert!(terrain.height(0.0, 0.0) < before);
         assert_eq!(turn.current_player, PlayerId::Two);
-        assert_eq!(turn.phase, TurnPhase::Ready);
+        assert_eq!(turn.phase, TurnPhase::Choosing);
     }
 
     #[test]
@@ -991,7 +1141,7 @@ mod tests {
         assert!(impact.is_none());
         assert_eq!(terrain.height(0.0, 0.0), before);
         assert_eq!(turn.current_player, PlayerId::Two);
-        assert_eq!(turn.phase, TurnPhase::Ready);
+        assert_eq!(turn.phase, TurnPhase::Choosing);
         assert!(!turn.complete_resolution());
     }
 }

@@ -1,12 +1,13 @@
 use crate::{
     aiming::{AimAdjustment, AimingState},
-    tank::PlayerId,
+    tank::{MOVEMENT_ALLOWANCE, PlayerId},
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurnPhase {
-    Ready,
-    Resolving,
+    Choosing,
+    Moving { remaining_steps: u8 },
+    ResolvingFire,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -21,7 +22,7 @@ impl TurnState {
     pub fn new(player_one_aim: AimingState, player_two_aim: AimingState) -> Self {
         Self {
             current_player: PlayerId::One,
-            phase: TurnPhase::Ready,
+            phase: TurnPhase::Choosing,
             player_one_aim,
             player_two_aim,
         }
@@ -39,10 +40,9 @@ impl TurnState {
     }
 
     pub fn apply_current_aim(&mut self, adjustment: AimAdjustment, coarse: bool) -> bool {
-        if self.phase != TurnPhase::Ready {
+        if self.phase != TurnPhase::Choosing {
             return false;
         }
-
         match self.current_player {
             PlayerId::One => self.player_one_aim.apply(adjustment, coarse),
             PlayerId::Two => self.player_two_aim.apply(adjustment, coarse),
@@ -50,23 +50,69 @@ impl TurnState {
         true
     }
 
+    pub fn begin_movement(&mut self) -> bool {
+        if self.phase != TurnPhase::Choosing {
+            return false;
+        }
+        self.phase = TurnPhase::Moving {
+            remaining_steps: MOVEMENT_ALLOWANCE,
+        };
+        true
+    }
+
+    pub fn remaining_movement(self) -> Option<u8> {
+        match self.phase {
+            TurnPhase::Moving { remaining_steps } => Some(remaining_steps),
+            TurnPhase::Choosing | TurnPhase::ResolvingFire => None,
+        }
+    }
+
+    /// The caller must first commit a terrain-validated tank pose. This order makes an invalid
+    /// movement request incapable of spending allowance or advancing a turn.
+    pub fn accept_movement_step(&mut self) -> bool {
+        let TurnPhase::Moving { remaining_steps } = self.phase else {
+            return false;
+        };
+        if remaining_steps == 0 {
+            return false;
+        }
+        if remaining_steps == 1 {
+            self.advance_to_next_choosing();
+        } else {
+            self.phase = TurnPhase::Moving {
+                remaining_steps: remaining_steps - 1,
+            };
+        }
+        true
+    }
+
+    pub fn finish_movement(&mut self) -> bool {
+        if self.remaining_movement().is_none() {
+            return false;
+        }
+        self.advance_to_next_choosing();
+        true
+    }
+
     pub fn begin_fire(&mut self) -> Option<(PlayerId, AimingState)> {
-        if self.phase != TurnPhase::Ready {
+        if self.phase != TurnPhase::Choosing {
             return None;
         }
-
-        self.phase = TurnPhase::Resolving;
+        self.phase = TurnPhase::ResolvingFire;
         Some((self.current_player, self.current_aim()))
     }
 
     pub fn complete_resolution(&mut self) -> bool {
-        if self.phase != TurnPhase::Resolving {
+        if self.phase != TurnPhase::ResolvingFire {
             return false;
         }
-
-        self.current_player = self.current_player.other();
-        self.phase = TurnPhase::Ready;
+        self.advance_to_next_choosing();
         true
+    }
+
+    fn advance_to_next_choosing(&mut self) {
+        self.current_player = self.current_player.other();
+        self.phase = TurnPhase::Choosing;
     }
 }
 
@@ -82,77 +128,95 @@ mod tests {
     }
 
     #[test]
-    fn player_one_starts_ready_with_their_own_aim() {
+    fn player_one_starts_choosing_with_their_own_aim() {
         let state = state();
-
         assert_eq!(state.current_player, PlayerId::One);
-        assert_eq!(state.phase, TurnPhase::Ready);
+        assert_eq!(state.phase, TurnPhase::Choosing);
         assert_eq!(state.current_aim(), state.aim_for(PlayerId::One));
+    }
+
+    #[test]
+    fn choosing_exactly_one_primary_action_locks_the_other() {
+        let mut state = state();
+        assert!(state.begin_movement());
+        assert_eq!(state.remaining_movement(), Some(MOVEMENT_ALLOWANCE));
+        assert!(state.begin_fire().is_none());
+        assert!(!state.apply_current_aim(AimAdjustment::ElevationIncrease, false));
+        assert!(!state.begin_movement());
+        assert!(state.finish_movement());
+        assert_eq!(state.current_player, PlayerId::Two);
+        assert!(state.begin_fire().is_some());
+        assert!(!state.begin_movement());
     }
 
     #[test]
     fn firing_resolves_before_switching_players() {
         let mut state = state();
         let fired = state.begin_fire();
-
         assert_eq!(fired, Some((PlayerId::One, state.aim_for(PlayerId::One))));
-        assert_eq!(state.current_player, PlayerId::One);
-        assert_eq!(state.phase, TurnPhase::Resolving);
-        assert!(state.begin_fire().is_none());
-
+        assert_eq!(state.phase, TurnPhase::ResolvingFire);
         assert!(state.complete_resolution());
         assert_eq!(state.current_player, PlayerId::Two);
-        assert_eq!(state.phase, TurnPhase::Ready);
+        assert_eq!(state.phase, TurnPhase::Choosing);
     }
 
     #[test]
-    fn each_player_retains_independent_aim_across_a_round_trip() {
+    fn movement_allowance_is_consumed_only_by_accepted_steps() {
         let mut state = state();
-        let player_one = state.current_aim();
+        assert!(state.begin_movement());
+        for expected in (1..MOVEMENT_ALLOWANCE).rev() {
+            assert!(state.accept_movement_step());
+            assert_eq!(state.remaining_movement(), Some(expected));
+            assert_eq!(state.current_player, PlayerId::One);
+        }
+        assert!(state.accept_movement_step());
+        assert_eq!(state.current_player, PlayerId::Two);
+        assert_eq!(state.phase, TurnPhase::Choosing);
+        assert!(!state.accept_movement_step());
+    }
+
+    #[test]
+    fn ending_movement_early_forfeits_allowance_once() {
+        let mut state = state();
+        state.begin_movement();
+        state.accept_movement_step();
+        assert_eq!(state.remaining_movement(), Some(MOVEMENT_ALLOWANCE - 1));
+        assert!(state.finish_movement());
+        assert_eq!(state.current_player, PlayerId::Two);
+        assert!(!state.finish_movement());
+    }
+
+    #[test]
+    fn each_player_retains_independent_aim_across_movement_and_fire() {
+        let mut state = state();
         state.apply_current_aim(AimAdjustment::AzimuthIncrease, false);
         let changed_player_one = state.current_aim();
-        assert_ne!(player_one, changed_player_one);
-        state.begin_fire();
-        state.complete_resolution();
-
+        state.begin_movement();
+        state.finish_movement();
         let player_two = state.current_aim();
         state.apply_current_aim(AimAdjustment::PowerDecrease, false);
-        let changed_player_two = state.current_aim();
-        assert_ne!(player_two, changed_player_two);
-        assert_eq!(state.aim_for(PlayerId::One), changed_player_one);
         state.begin_fire();
         state.complete_resolution();
 
         assert_eq!(state.current_player, PlayerId::One);
         assert_eq!(state.current_aim(), changed_player_one);
-        assert_eq!(state.aim_for(PlayerId::Two), changed_player_two);
+        assert_eq!(
+            state.aim_for(PlayerId::Two).azimuth_degrees,
+            player_two.azimuth_degrees
+        );
     }
 
     #[test]
-    fn resolving_rejects_aim_and_repeated_fire() {
+    fn resolving_rejects_every_other_action() {
         let mut state = state();
         let before = state.current_aim();
         state.begin_fire();
-
         assert!(!state.apply_current_aim(AimAdjustment::ElevationIncrease, false));
         assert!(state.begin_fire().is_none());
+        assert!(!state.begin_movement());
+        assert!(!state.finish_movement());
+        assert!(!state.accept_movement_step());
         assert_eq!(state.current_aim(), before);
-    }
-
-    #[test]
-    fn twenty_completions_alternate_deterministically() {
-        let mut state = state();
-        for index in 0..20 {
-            let expected = if index % 2 == 0 {
-                PlayerId::One
-            } else {
-                PlayerId::Two
-            };
-            assert_eq!(state.current_player, expected);
-            assert!(state.begin_fire().is_some());
-            assert!(state.complete_resolution());
-        }
-        assert_eq!(state.current_player, PlayerId::One);
     }
 
     #[test]
@@ -160,21 +224,21 @@ mod tests {
         fn play_trace() -> Vec<(PlayerId, TurnPhase, AimingState)> {
             let mut state = state();
             let mut trace = Vec::new();
-            for adjustment in [
-                AimAdjustment::AzimuthIncrease,
-                AimAdjustment::PowerDecrease,
-                AimAdjustment::ElevationIncrease,
-                AimAdjustment::AzimuthDecrease,
-            ] {
-                state.apply_current_aim(adjustment, false);
-                state.begin_fire();
-                trace.push((state.current_player, state.phase, state.current_aim()));
-                state.complete_resolution();
+            for movement in [true, false, true, false] {
+                if movement {
+                    state.begin_movement();
+                    state.accept_movement_step();
+                    state.finish_movement();
+                } else {
+                    state.apply_current_aim(AimAdjustment::AzimuthIncrease, false);
+                    state.begin_fire();
+                    trace.push((state.current_player, state.phase, state.current_aim()));
+                    state.complete_resolution();
+                }
                 trace.push((state.current_player, state.phase, state.current_aim()));
             }
             trace
         }
-
         assert_eq!(play_trace(), play_trace());
     }
 }

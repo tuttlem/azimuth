@@ -9,13 +9,14 @@ fidelity. Ridiculous weapons and strange battlefields are welcome when they make
 
 ## Status
 
-Minimal alternating artillery loop. Azimuth renders two distinct, terrain-grounded tank
-placeholders on a bounded non-flat battlefield. Player One and Player Two take deterministic turns:
-the current player adjusts azimuth, elevation, and power, fires one projectile from that tank's
-barrel, observes its marker/boom/crater result, then hands control to the other player after the
-shot resolves. Each player retains their own aiming values for bracketing later shots. The boom
-remains presentation only: crater radius and depth are separate gameplay values. Azimuth still has
-no damage, tank settling, movement, victory, audio content, or networking.
+Basic move-or-fire artillery loop. Azimuth renders two distinct tank placeholders on a bounded,
+non-flat, deformable battlefield. Player One and Player Two take deterministic turns: the current
+player either fires one shot or sacrifices that shot to reposition. Movement is six deliberate
+one-unit cardinal steps over current terrain, including craters; steep terrain and battlefield
+edges block a step without spending allowance. Each player retains their own aiming values, so a
+move changes the firing origin and world-space solution without erasing prior knowledge. The boom
+remains presentation only. Azimuth still has no damage, tank settling after later terrain changes,
+victory, audio content, or networking.
 
 ## Prerequisites
 
@@ -70,17 +71,26 @@ The current camera is a development inspection tool, not the final gameplay came
 - Scroll the mouse wheel to move closer to or farther from it.
 - Use WASD or arrow keys to pan across the battlefield.
 - Player One (red) begins, then turns alternate with Player Two (blue). The corner display names
-  the authoritative current player and whether their shot is ready or resolving. Use Q/E to
+  the authoritative current player and whether they are choosing, moving, or resolving a shot.
+  While choosing, use Q/E to
   decrease/increase that player's azimuth, R/F to increase/decrease elevation, and T/G to
   increase/decrease power. Hold Shift for coarse changes. Azimuth wraps through 0–359 degrees;
   elevation is limited to 5–85 degrees; power is launch velocity limited to 8–30 abstract units
   per second. Each player retains their own settings across the other player's turn.
-- Press Space to fire the current player's aim from that tank's visible barrel-end marker. A
-  projectile remains the only active shot while it resolves; aiming and fire input are locked.
+- Press M to choose movement. I/J/K/L request one step toward negative Z/negative X/positive
+  Z/positive X. A movement action starts with six steps; a valid step must stay within the
+  battlefield and change terrain height by no more than 0.75 units. The display shows remaining
+  steps and a concise reason when terrain is too steep or a boundary blocks a request. Press Enter
+  to end movement early; using the final step also hands control to the other player. Movement
+  changes only body facing, while the turret continues to use retained aim.
+- Press Space to choose firing and launch the current player's aim from that tank's visible
+  barrel-end marker. Moving and firing are mutually exclusive for a turn. A projectile remains the
+  only active shot while it resolves; action, aiming, and movement input are locked.
   Terrain impact applies its crater before the other player becomes ready. A shot that leaves the
   useful simulation volume or expires without an impact still hands off normally without an
   invented marker, boom, or crater. The temporary boom is presentation-only and may overlap the
-  next ready turn; tanks retain their original positions.
+  next choosing turn. Tanks deliberately do not settle when a later impact removes terrain below
+  them; a tank is grounded whenever the player deliberately moves it.
 
 World-space and shot-angle conventions are documented in
 [docs/world-conventions.md](docs/world-conventions.md). The fixed-step ballistic model and its
