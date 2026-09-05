@@ -16,8 +16,24 @@ position = position + velocity * dt + 0.5 * acceleration * dt²
 velocity = velocity + acceleration * dt
 ```
 
-This makes horizontal velocity constant when gravity is the only force and leaves a direct,
-understandable per-step boundary for later terrain collision work.
+This makes horizontal velocity constant when gravity is the only force and gives terrain impact a
+direct, understandable per-step boundary.
+
+## Terrain Impact
+
+The battlefield is a static grid of rendered triangles. Its local-height query uses those same
+triangles, so tank grounding, projectile collision, and the visible surface agree.
+
+After calculating each candidate fixed-step position, the projectile compares its previous and
+candidate positions with the terrain. When an in-bounds segment moves from above terrain to on or
+below it, the simulation refines the crossing with 24 fixed bisection iterations. This prevents a
+fast projectile from tunnelling through the terrain and produces a deterministic impact position
+close to the visible surface.
+
+An impact ends flight in that simulation step and records only a terrain-impact position. The
+projectile has no bounce, penetration, explosion, damage, or terrain-deformation behaviour. A
+shot that leaves the useful simulation volume without an in-bounds terrain crossing instead ends
+without an impact result.
 
 ## Development Shot
 
@@ -26,6 +42,10 @@ azimuth, 45 degrees of elevation, a launch speed of 18 abstract units per second
 gravity magnitude of 8 abstract units per second squared. A second Space press while that shot is
 in flight is ignored.
 
+Press I to fire a separate fixed inspection shot with the same origin and elevation but a launch
+speed of 14 abstract units per second. It lands within the current bounded terrain and exists only
+to make terrain impact and its marker easy to inspect; it is not an aiming control.
+
 The gravity value is explicit and may be changed during development to compare trajectories; it is
 not a declaration that Azimuth uses Earth gravity. The launch speed is likewise a development value,
 not a final player-facing power scale.
@@ -33,8 +53,9 @@ not a final player-facing power scale.
 ## Intentional Boundary
 
 The projectile is rendered as a simple sphere driven entirely by simulation state. It has no mass,
-drag, wind, weapon properties, collision, impact, explosion, damage, or terrain deformation.
-It can pass through the current terrain. The flight ends only when it leaves the documented
-simulation volume or reaches its 20-second simulated lifetime.
+drag, wind, weapon properties, explosion, damage, or terrain deformation. It stops at terrain
+impact or ends when it leaves the documented simulation volume or reaches its 20-second simulated
+lifetime. A small removable development marker shows the latest terrain-impact position; it does
+not affect simulation.
 
 Shot-angle and launch-origin conventions are defined in [world-conventions.md](world-conventions.md).

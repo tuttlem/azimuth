@@ -9,9 +9,10 @@ fidelity. Ridiculous weapons and strange battlefields are welcome when they make
 
 ## Status
 
-First deterministic projectile arc. Azimuth now renders two distinct, terrain-grounded tank
-placeholders on a bounded battlefield and can fire one visible development projectile through a
-configurable gravity field. The projectile currently has no terrain collision, impact, aiming UI,
+First terrain-impact loop. Azimuth renders two distinct, terrain-grounded tank placeholders on a
+bounded non-flat battlefield and can fire one visible deterministic development projectile through
+a configurable gravity field. A projectile stops at the visible terrain surface and leaves a simple
+development impact marker. It still has no explosion, damage, terrain deformation, aiming UI,
 movement, turns, audio content, or networking.
 
 ## Prerequisites
@@ -67,7 +68,10 @@ The current camera is a development inspection tool, not the final gameplay came
 - Scroll the mouse wheel to move closer to or farther from it.
 - Use WASD or arrow keys to pan across the battlefield.
 - Press Space to fire one fixed development shot from Player One. Further presses are ignored until
-  that projectile leaves its simulation volume.
+  that projectile impacts terrain or leaves its simulation volume. A small orange marker shows the
+  latest terrain-impact position and clears when the next shot launches.
+- Press I to fire a shorter fixed development impact shot. It is an inspection aid that lands
+  within the current battlefield; it is not an aiming control.
 
 World-space and shot-angle conventions are documented in
 [docs/world-conventions.md](docs/world-conventions.md). The fixed-step ballistic model and its

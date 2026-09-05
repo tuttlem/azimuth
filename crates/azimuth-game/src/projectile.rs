@@ -111,6 +111,18 @@ pub struct Projectile {
     elapsed_steps: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TerrainImpact {
+    pub position: WorldPosition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum ProjectileAdvance {
+    Active,
+    TerrainImpact(TerrainImpact),
+    OutOfBounds,
+}
+
 impl Projectile {
     pub fn launch(parameters: ShotParameters) -> Self {
         Self {
@@ -124,21 +136,78 @@ impl Projectile {
         self.elapsed_steps as f32 * FIXED_STEP_SECONDS
     }
 
-    /// Advances one fixed, constant-acceleration step. Position uses the current velocity plus
-    /// half the acceleration term so this simple model remains analytically understandable.
-    pub fn advance(&mut self, gravity: Gravity, limits: SimulationLimits) -> bool {
+    /// Advances one fixed step and resolves an in-bounds terrain crossing along the travelled
+    /// segment. Twenty-four bisection iterations make the contact precise enough for the compact
+    /// battlefield while keeping work and results fixed for deterministic simulation.
+    pub fn advance_with_terrain(
+        &mut self,
+        gravity: Gravity,
+        limits: SimulationLimits,
+        terrain_height: fn(f32, f32) -> Option<f32>,
+    ) -> ProjectileAdvance {
+        let previous_position = self.position;
         let acceleration = gravity.acceleration();
         let step = FIXED_STEP_SECONDS;
         let displacement = self
             .velocity
             .scaled(step)
             .added(acceleration.scaled(0.5 * step * step));
+        let candidate_position = self.position.translated(displacement);
+        let candidate_velocity = self.velocity.added(acceleration.scaled(step));
 
-        self.position = self.position.translated(displacement);
-        self.velocity = self.velocity.added(acceleration.scaled(step));
+        self.velocity = candidate_velocity;
         self.elapsed_steps += 1;
 
-        limits.contains(*self)
+        if let (Some(previous_height), Some(candidate_height)) = (
+            terrain_height(previous_position.x, previous_position.z),
+            terrain_height(candidate_position.x, candidate_position.z),
+        ) && previous_position.y > previous_height
+            && candidate_position.y <= candidate_height
+        {
+            let impact_position =
+                refine_terrain_impact(previous_position, candidate_position, terrain_height);
+            self.position = impact_position;
+            return ProjectileAdvance::TerrainImpact(TerrainImpact {
+                position: impact_position,
+            });
+        }
+
+        self.position = candidate_position;
+        if limits.contains(*self) {
+            ProjectileAdvance::Active
+        } else {
+            ProjectileAdvance::OutOfBounds
+        }
+    }
+}
+
+fn refine_terrain_impact(
+    mut above: WorldPosition,
+    mut below: WorldPosition,
+    terrain_height: fn(f32, f32) -> Option<f32>,
+) -> WorldPosition {
+    for _ in 0..24 {
+        let midpoint = interpolate_position(above, below, 0.5);
+        let height = terrain_height(midpoint.x, midpoint.z)
+            .expect("terrain crossing refinement must remain within terrain bounds");
+
+        if midpoint.y > height {
+            above = midpoint;
+        } else {
+            below = midpoint;
+        }
+    }
+
+    let height = terrain_height(below.x, below.z)
+        .expect("terrain crossing refinement must remain within terrain bounds");
+    WorldPosition { y: height, ..below }
+}
+
+fn interpolate_position(start: WorldPosition, end: WorldPosition, fraction: f32) -> WorldPosition {
+    WorldPosition {
+        x: start.x + (end.x - start.x) * fraction,
+        y: start.y + (end.y - start.y) * fraction,
+        z: start.z + (end.z - start.z) * fraction,
     }
 }
 
@@ -171,6 +240,21 @@ mod tests {
             (actual - expected).abs() < EPSILON,
             "expected {expected}, got {actual}"
         );
+    }
+
+    fn no_terrain(_: f32, _: f32) -> Option<f32> {
+        None
+    }
+
+    fn advance_without_terrain(
+        projectile: &mut Projectile,
+        gravity: Gravity,
+        limits: SimulationLimits,
+    ) -> bool {
+        matches!(
+            projectile.advance_with_terrain(gravity, limits, no_terrain),
+            ProjectileAdvance::Active
+        )
     }
 
     fn launch(azimuth: f32, elevation: f32, speed: f32) -> Projectile {
@@ -279,7 +363,11 @@ mod tests {
         let initial_velocity = projectile.velocity;
         let gravity = Gravity::new(8.0).unwrap();
 
-        assert!(projectile.advance(gravity, SimulationLimits::DEVELOPMENT));
+        assert!(advance_without_terrain(
+            &mut projectile,
+            gravity,
+            SimulationLimits::DEVELOPMENT
+        ));
         assert_close(projectile.velocity.x, initial_velocity.x);
         assert_close(projectile.velocity.z, initial_velocity.z);
         assert_close(
@@ -296,7 +384,11 @@ mod tests {
         let gravity = Gravity::new(8.0).unwrap();
 
         for _ in 0..120 {
-            assert!(projectile.advance(gravity, SimulationLimits::DEVELOPMENT));
+            assert!(advance_without_terrain(
+                &mut projectile,
+                gravity,
+                SimulationLimits::DEVELOPMENT
+            ));
         }
 
         assert_close(
@@ -322,8 +414,8 @@ mod tests {
 
         for _ in 0..300 {
             assert_eq!(
-                first.advance(gravity, SimulationLimits::DEVELOPMENT),
-                second.advance(gravity, SimulationLimits::DEVELOPMENT)
+                advance_without_terrain(&mut first, gravity, SimulationLimits::DEVELOPMENT),
+                advance_without_terrain(&mut second, gravity, SimulationLimits::DEVELOPMENT)
             );
             assert_eq!(first, second);
         }
@@ -337,7 +429,7 @@ mod tests {
         let mut descended = false;
 
         for _ in 0..600 {
-            if !projectile.advance(gravity, SimulationLimits::DEVELOPMENT) {
+            if !advance_without_terrain(&mut projectile, gravity, SimulationLimits::DEVELOPMENT) {
                 break;
             }
             if projectile.position.y < highest_y {
@@ -357,7 +449,11 @@ mod tests {
         let initial_velocity = projectile.velocity;
 
         for _ in 0..120 {
-            assert!(projectile.advance(Gravity::new(0.0).unwrap(), SimulationLimits::DEVELOPMENT));
+            assert!(advance_without_terrain(
+                &mut projectile,
+                Gravity::new(0.0).unwrap(),
+                SimulationLimits::DEVELOPMENT
+            ));
         }
 
         assert_eq!(projectile.velocity, initial_velocity);
@@ -369,8 +465,16 @@ mod tests {
         let mut strong = weak;
 
         for _ in 0..120 {
-            assert!(weak.advance(Gravity::new(4.0).unwrap(), SimulationLimits::DEVELOPMENT));
-            assert!(strong.advance(Gravity::new(12.0).unwrap(), SimulationLimits::DEVELOPMENT));
+            assert!(advance_without_terrain(
+                &mut weak,
+                Gravity::new(4.0).unwrap(),
+                SimulationLimits::DEVELOPMENT
+            ));
+            assert!(advance_without_terrain(
+                &mut strong,
+                Gravity::new(12.0).unwrap(),
+                SimulationLimits::DEVELOPMENT
+            ));
         }
 
         assert!(strong.position.y < weak.position.y);
@@ -388,7 +492,11 @@ mod tests {
             velocity: WorldVector::ZERO,
             elapsed_steps: 0,
         };
-        assert!(below_terrain.advance(Gravity::new(0.0).unwrap(), SimulationLimits::DEVELOPMENT));
+        assert!(advance_without_terrain(
+            &mut below_terrain,
+            Gravity::new(0.0).unwrap(),
+            SimulationLimits::DEVELOPMENT
+        ));
 
         let mut outside_horizontal = Projectile {
             position: WorldPosition {
@@ -402,9 +510,11 @@ mod tests {
             },
             elapsed_steps: 0,
         };
-        assert!(
-            !outside_horizontal.advance(Gravity::new(0.0).unwrap(), SimulationLimits::DEVELOPMENT)
-        );
+        assert!(!advance_without_terrain(
+            &mut outside_horizontal,
+            Gravity::new(0.0).unwrap(),
+            SimulationLimits::DEVELOPMENT
+        ));
     }
 
     #[test]
@@ -427,6 +537,238 @@ mod tests {
         assert_eq!(
             azimuth_from_horizontal_direction(0.0, 0.0),
             Err(ProjectileParameterError::HorizontalDirection)
+        );
+    }
+
+    fn flat_terrain(_: f32, _: f32) -> Option<f32> {
+        Some(0.0)
+    }
+
+    fn sloped_terrain(x: f32, z: f32) -> Option<f32> {
+        Some(0.25 * x - 0.1 * z)
+    }
+
+    fn generous_limits() -> SimulationLimits {
+        SimulationLimits {
+            horizontal_extent: 10_000.0,
+            minimum_y: -10_000.0,
+            maximum_y: 10_000.0,
+            maximum_flight_seconds: 20.0,
+        }
+    }
+
+    #[test]
+    fn terrain_advance_keeps_a_projectile_above_terrain_active() {
+        let mut projectile = launch(0.0, 0.0, 12.0);
+
+        assert_eq!(
+            projectile.advance_with_terrain(
+                Gravity::new(0.0).unwrap(),
+                SimulationLimits::DEVELOPMENT,
+                flat_terrain,
+            ),
+            ProjectileAdvance::Active
+        );
+    }
+
+    #[test]
+    fn terrain_advance_resolves_a_flat_ground_crossing() {
+        let mut projectile = Projectile {
+            position: WorldPosition {
+                x: 0.0,
+                y: 1.0,
+                z: 0.0,
+            },
+            velocity: WorldVector {
+                y: -240.0,
+                ..WorldVector::ZERO
+            },
+            elapsed_steps: 0,
+        };
+
+        let outcome = projectile.advance_with_terrain(
+            Gravity::new(0.0).unwrap(),
+            generous_limits(),
+            flat_terrain,
+        );
+
+        assert_eq!(
+            outcome,
+            ProjectileAdvance::TerrainImpact(TerrainImpact {
+                position: projectile.position,
+            })
+        );
+        assert_close(projectile.position.y, 0.0);
+        assert_close(projectile.velocity.y, -240.0);
+    }
+
+    #[test]
+    fn terrain_advance_treats_endpoint_contact_as_one_impact() {
+        let mut projectile = Projectile {
+            position: WorldPosition {
+                x: 0.0,
+                y: 2.0,
+                z: 0.0,
+            },
+            velocity: WorldVector {
+                y: -240.0,
+                ..WorldVector::ZERO
+            },
+            elapsed_steps: 0,
+        };
+
+        assert!(matches!(
+            projectile.advance_with_terrain(
+                Gravity::new(0.0).unwrap(),
+                generous_limits(),
+                flat_terrain,
+            ),
+            ProjectileAdvance::TerrainImpact(_)
+        ));
+        assert_close(projectile.position.y, 0.0);
+    }
+
+    #[test]
+    fn terrain_advance_prevents_high_speed_tunnelling() {
+        let mut projectile = Projectile {
+            position: WorldPosition {
+                x: 0.0,
+                y: 5.0,
+                z: 0.0,
+            },
+            velocity: WorldVector {
+                y: -12_000.0,
+                ..WorldVector::ZERO
+            },
+            elapsed_steps: 0,
+        };
+
+        let outcome = projectile.advance_with_terrain(
+            Gravity::new(0.0).unwrap(),
+            generous_limits(),
+            flat_terrain,
+        );
+
+        assert!(matches!(outcome, ProjectileAdvance::TerrainImpact(_)));
+        assert!(projectile.position.y.abs() < 0.01);
+    }
+
+    #[test]
+    fn terrain_advance_resolves_contact_on_a_slope() {
+        let mut projectile = Projectile {
+            position: WorldPosition {
+                x: 0.0,
+                y: 2.0,
+                z: 0.0,
+            },
+            velocity: WorldVector {
+                x: 120.0,
+                y: -300.0,
+                z: 60.0,
+            },
+            elapsed_steps: 0,
+        };
+
+        let outcome = projectile.advance_with_terrain(
+            Gravity::new(0.0).unwrap(),
+            generous_limits(),
+            sloped_terrain,
+        );
+
+        assert!(matches!(outcome, ProjectileAdvance::TerrainImpact(_)));
+        assert!(
+            (projectile.position.y
+                - sloped_terrain(projectile.position.x, projectile.position.z).unwrap())
+            .abs()
+                < 0.01
+        );
+    }
+
+    #[test]
+    fn terrain_advance_is_repeatable_under_different_valid_gravity() {
+        for gravity in [0.0, 8.0, 16.0] {
+            let mut first = Projectile {
+                position: WorldPosition {
+                    x: 0.0,
+                    y: 1.0,
+                    z: 0.0,
+                },
+                velocity: WorldVector {
+                    x: 24.0,
+                    y: -240.0,
+                    ..WorldVector::ZERO
+                },
+                elapsed_steps: 0,
+            };
+            let mut second = first;
+            let gravity = Gravity::new(gravity).unwrap();
+
+            assert_eq!(
+                first.advance_with_terrain(gravity, generous_limits(), sloped_terrain),
+                second.advance_with_terrain(gravity, generous_limits(), sloped_terrain)
+            );
+            assert_eq!(first, second);
+        }
+    }
+
+    #[test]
+    fn terrain_advance_keeps_non_impact_termination_distinct() {
+        let mut projectile = Projectile {
+            position: WorldPosition {
+                x: 60.0,
+                y: 5.0,
+                z: 0.0,
+            },
+            velocity: WorldVector {
+                x: 1.0,
+                ..WorldVector::ZERO
+            },
+            elapsed_steps: 0,
+        };
+
+        assert_eq!(
+            projectile.advance_with_terrain(
+                Gravity::new(0.0).unwrap(),
+                SimulationLimits::DEVELOPMENT,
+                flat_terrain,
+            ),
+            ProjectileAdvance::OutOfBounds
+        );
+    }
+
+    #[test]
+    fn fixed_development_impact_shot_hits_the_non_flat_battlefield() {
+        let tank = crate::tank::initial_tanks()[0];
+        let azimuth = azimuth_from_horizontal_direction(
+            tank.pose.turret_forward.x,
+            tank.pose.turret_forward.z,
+        )
+        .unwrap();
+        let mut projectile = Projectile::launch(
+            ShotParameters::new(tank.firing_origin(), azimuth, 45.0, 14.0).unwrap(),
+        );
+
+        let outcome = (0..2_400)
+            .find_map(|_| {
+                match projectile.advance_with_terrain(
+                    Gravity::new(8.0).unwrap(),
+                    SimulationLimits::DEVELOPMENT,
+                    crate::battlefield::terrain_height_if_within_bounds,
+                ) {
+                    ProjectileAdvance::Active => None,
+                    outcome => Some(outcome),
+                }
+            })
+            .expect("fixed development impact shot must terminate");
+
+        let ProjectileAdvance::TerrainImpact(impact) = outcome else {
+            panic!("fixed development impact shot must hit terrain, got {outcome:?}");
+        };
+        assert!(
+            (impact.position.y
+                - crate::battlefield::terrain_height(impact.position.x, impact.position.z))
+            .abs()
+                < 0.01
         );
     }
 }

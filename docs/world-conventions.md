@@ -36,8 +36,14 @@ They describe Azimuth's game world rather than a rendering API's coordinate nami
 - The first projectile simulation has a generous useful volume: X and Z must remain within 60
   units of the origin, Y must remain from -30 through 100, and flight lasts at most 20 simulated
   seconds.
-- Leaving one of those limits ends the current development flight. Crossing visible terrain does
-  **not** end a flight yet; terrain impact is a separate feature.
+- The visible battlefield terrain is bounded from -20 to +20 on X and Z. It is a 20-by-20 grid of
+  rendered triangles whose piecewise planar surface is authoritative for local terrain height,
+  tank placement, and projectile intersection.
+- A projectile that travels from above to on or below that in-bounds terrain surface during a fixed
+  step impacts it. The impact point is refined deterministically along that travelled segment and
+  ends flight; a lightweight development marker displays the result.
+- Leaving a useful-volume or lifetime limit without an in-bounds terrain crossing ends the current
+  development flight without a terrain-impact result.
 
 See [projectile-model.md](projectile-model.md) for the deterministic fixed-step motion model and
 development defaults.

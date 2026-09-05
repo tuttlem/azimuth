@@ -21,7 +21,7 @@ These milestones represent the current intended development path.
 * [x] Render a minimal 3D battlefield.
 * [x] Render two placeholder tanks/entities.
 * [x] Launch a projectile through a configurable gravity field.
-* [ ] Detect projectile impact with the battlefield.
+* [x] Detect projectile impact with the battlefield.
 * [ ] Produce a visible impact/explosion.
 * [ ] Deform terrain at the impact point.
 * [ ] Add basic aiming controls: azimuth, elevation, and power.
@@ -164,7 +164,7 @@ The objective is understandable, reproducible, tuneable behaviour rather than ma
 
 * [ ] Provide optional visible trajectory traces.
 * [ ] Provide debug launch vectors.
-* [ ] Provide impact markers.
+* [x] Provide impact markers.
 * [ ] Provide useful simulation diagnostics during development.
 * [ ] Ensure development diagnostics can be disabled cleanly.
 
@@ -275,10 +275,10 @@ Terrain should affect both aiming and tactical position.
 
 ## Basic Terrain
 
-* [ ] Define initial battlefield representation.
+* [x] Define initial battlefield representation.
 * [x] Render non-flat terrain.
 * [x] Support meaningful elevation changes.
-* [ ] Detect projectile intersection with terrain.
+* [x] Detect projectile intersection with terrain.
 * [x] Position tanks correctly on terrain.
 * [x] Determine local terrain height.
 * [ ] Determine local terrain slope.

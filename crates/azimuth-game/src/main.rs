@@ -5,7 +5,9 @@ mod world;
 
 use std::f32::consts::FRAC_PI_2;
 
-use battlefield::{HALF_EXTENT, terrain_height};
+use battlefield::{
+    HALF_EXTENT, terrain_height_if_within_bounds, terrain_mesh_indices, terrain_mesh_positions,
+};
 use bevy::{
     asset::RenderAssetUsages,
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
@@ -14,12 +16,12 @@ use bevy::{
     render::render_resource::PrimitiveTopology,
 };
 use projectile::{
-    Gravity, Projectile, ShotParameters, SimulationLimits, azimuth_from_horizontal_direction,
+    Gravity, Projectile, ProjectileAdvance, ShotParameters, SimulationLimits, TerrainImpact,
+    azimuth_from_horizontal_direction,
 };
 use tank::{HorizontalDirection, PlayerId, Tank, initial_tanks};
 use world::WorldPosition;
 
-const TERRAIN_CELLS_PER_SIDE: u32 = 20;
 const CAMERA_MIN_DISTANCE: f32 = 8.0;
 const CAMERA_MAX_DISTANCE: f32 = 60.0;
 const CAMERA_PAN_SPEED: f32 = 12.0;
@@ -29,6 +31,7 @@ const CAMERA_PITCH_LIMIT: f32 = FRAC_PI_2 - 0.1;
 const PROJECTILE_FIXED_HZ: f64 = 120.0;
 const DEVELOPMENT_ELEVATION_DEGREES: f32 = 45.0;
 const DEVELOPMENT_LAUNCH_SPEED: f32 = 18.0;
+const DEVELOPMENT_IMPACT_LAUNCH_SPEED: f32 = 14.0;
 const DEVELOPMENT_GRAVITY: f32 = 8.0;
 
 #[derive(Component)]
@@ -45,6 +48,9 @@ struct InitialTanks([Tank; 2]);
 #[derive(Resource, Default)]
 struct ProjectileFlight(Option<Projectile>);
 
+#[derive(Resource, Default)]
+struct LatestTerrainImpact(Option<TerrainImpact>);
+
 #[derive(Resource)]
 struct BattlefieldGravity(Gravity);
 
@@ -54,8 +60,17 @@ struct ProjectileVisualAssets {
     material: Handle<StandardMaterial>,
 }
 
+#[derive(Resource)]
+struct ImpactMarkerAssets {
+    mesh: Handle<Mesh>,
+    material: Handle<StandardMaterial>,
+}
+
 #[derive(Component)]
 struct ProjectileVisual;
+
+#[derive(Component)]
+struct ImpactMarker;
 
 impl Default for BattlefieldCamera {
     fn default() -> Self {
@@ -73,6 +88,7 @@ fn main() {
         .add_plugins(DefaultPlugins)
         .insert_resource(InitialTanks(initial_tanks()))
         .insert_resource(ProjectileFlight::default())
+        .insert_resource(LatestTerrainImpact::default())
         .insert_resource(BattlefieldGravity(
             Gravity::new(DEVELOPMENT_GRAVITY).expect("development gravity must be valid"),
         ))
@@ -84,6 +100,7 @@ fn main() {
                 update_battlefield_camera,
                 launch_development_projectile,
                 sync_projectile_visual,
+                sync_impact_marker,
                 draw_world_axes,
             ),
         )
@@ -143,6 +160,10 @@ fn spawn_battlefield_scene(
         mesh: meshes.add(Sphere::new(0.28)),
         material: materials.add(Color::srgb(1.0, 0.92, 0.35)),
     });
+    commands.insert_resource(ImpactMarkerAssets {
+        mesh: meshes.add(Sphere::new(0.18)),
+        material: materials.add(Color::srgb(1.0, 0.25, 0.1)),
+    });
 }
 
 fn launch_development_projectile(
@@ -150,9 +171,18 @@ fn launch_development_projectile(
     tanks: Res<InitialTanks>,
     assets: Res<ProjectileVisualAssets>,
     mut flight: ResMut<ProjectileFlight>,
+    mut latest_impact: ResMut<LatestTerrainImpact>,
     mut commands: Commands,
 ) {
-    if !keyboard.just_pressed(KeyCode::Space) || flight.0.is_some() {
+    let launch_speed = if keyboard.just_pressed(KeyCode::Space) {
+        DEVELOPMENT_LAUNCH_SPEED
+    } else if keyboard.just_pressed(KeyCode::KeyI) {
+        DEVELOPMENT_IMPACT_LAUNCH_SPEED
+    } else {
+        return;
+    };
+
+    if flight.0.is_some() {
         return;
     }
 
@@ -164,7 +194,7 @@ fn launch_development_projectile(
         tank.firing_origin(),
         azimuth,
         DEVELOPMENT_ELEVATION_DEGREES,
-        DEVELOPMENT_LAUNCH_SPEED,
+        launch_speed,
     )
     .expect("development shot parameters must be valid");
     let projectile = Projectile::launch(parameters);
@@ -177,17 +207,29 @@ fn launch_development_projectile(
         Transform::from_translation(to_bevy_position(projectile.position)),
     ));
     flight.0 = Some(projectile);
+    latest_impact.0 = None;
 }
 
-fn advance_projectile(gravity: Res<BattlefieldGravity>, mut flight: ResMut<ProjectileFlight>) {
+fn advance_projectile(
+    gravity: Res<BattlefieldGravity>,
+    mut flight: ResMut<ProjectileFlight>,
+    mut latest_impact: ResMut<LatestTerrainImpact>,
+) {
     let Some(mut projectile) = flight.0 else {
         return;
     };
 
-    if projectile.advance(gravity.0, SimulationLimits::DEVELOPMENT) {
-        flight.0 = Some(projectile);
-    } else {
-        flight.0 = None;
+    match projectile.advance_with_terrain(
+        gravity.0,
+        SimulationLimits::DEVELOPMENT,
+        terrain_height_if_within_bounds,
+    ) {
+        ProjectileAdvance::Active => flight.0 = Some(projectile),
+        ProjectileAdvance::TerrainImpact(impact) => {
+            latest_impact.0 = Some(impact);
+            flight.0 = None;
+        }
+        ProjectileAdvance::OutOfBounds => flight.0 = None,
     }
 }
 
@@ -202,6 +244,31 @@ fn sync_projectile_visual(
         }
     } else {
         for (entity, _) in &mut visuals {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn sync_impact_marker(
+    latest_impact: Res<LatestTerrainImpact>,
+    assets: Res<ImpactMarkerAssets>,
+    mut commands: Commands,
+    mut markers: Query<(Entity, &mut Transform), With<ImpactMarker>>,
+) {
+    if let Some(impact) = latest_impact.0 {
+        if let Some((_, mut transform)) = markers.iter_mut().next() {
+            transform.translation = to_bevy_position(impact.position);
+        } else {
+            commands.spawn((
+                Name::new("Terrain impact marker"),
+                ImpactMarker,
+                Mesh3d(assets.mesh.clone()),
+                MeshMaterial3d(assets.material.clone()),
+                Transform::from_translation(to_bevy_position(impact.position)),
+            ));
+        }
+    } else {
+        for (entity, _) in &mut markers {
             commands.entity(entity).despawn();
         }
     }
@@ -344,43 +411,12 @@ fn clamp_camera_target(target: Vec3) -> Vec3 {
 }
 
 fn create_battlefield_mesh() -> Mesh {
-    let cells = TERRAIN_CELLS_PER_SIDE as usize;
-    let step = HALF_EXTENT * 2.0 / TERRAIN_CELLS_PER_SIDE as f32;
-    let mut positions = Vec::with_capacity((cells + 1) * (cells + 1));
-
-    for z_index in 0..=cells {
-        for x_index in 0..=cells {
-            let x = -HALF_EXTENT + x_index as f32 * step;
-            let z = -HALF_EXTENT + z_index as f32 * step;
-            positions.push([x, terrain_height(x, z), z]);
-        }
-    }
-
-    let mut indices = Vec::with_capacity(cells * cells * 6);
-    for z_index in 0..cells {
-        for x_index in 0..cells {
-            let lower_left = (z_index * (cells + 1) + x_index) as u32;
-            let lower_right = lower_left + 1;
-            let upper_left = lower_left + (cells + 1) as u32;
-            let upper_right = upper_left + 1;
-
-            indices.extend_from_slice(&[
-                lower_left,
-                upper_left,
-                lower_right,
-                lower_right,
-                upper_left,
-                upper_right,
-            ]);
-        }
-    }
-
     Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
-    .with_inserted_indices(Indices::U32(indices))
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, terrain_mesh_positions())
+    .with_inserted_indices(Indices::U32(terrain_mesh_indices()))
     .with_computed_smooth_normals()
 }
 
