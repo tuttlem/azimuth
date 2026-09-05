@@ -1,14 +1,9 @@
 <!--
 Sync Impact Report
-- Version change: unratified template -> 1.0.0
-- Modified principles: template placeholders -> I. Fun Over Realism; II. Emergent
-  Gameplay Through Simple Systems; III. Code Coherence Over Cleverness; IV. Workspace
-  With Purposeful Boundaries; V. Deterministic and Testable Simulation; VI. Presentation
-  Must Not Own the Game; VII. Playable Progress Over Infrastructure; VIII. Scope
-  Discipline; IX. Roadmap Discipline; X. Timestamped Specifications; XI. Quality Is Part
-  of Completion; XII. Dependencies Must Earn Their Place; XIII. Comments Explain Intent;
-  XIV. Refactoring Is Normal; XV. The Game Must Remain Fun to Build.
-- Added sections: Project Constraints; Development Workflow and Quality Gates.
+- Version change: 1.0.0 -> 1.1.0
+- Modified principles: VIII. Scope Discipline; IX. Roadmap Discipline; X. Timestamped
+  Specifications; Development Workflow and Quality Gates.
+- Added sections: none.
 - Removed sections: none.
 - Follow-up TODOs: none.
 -->
@@ -157,11 +152,14 @@ purposeful boundaries, and deliberate dependencies.
 ## Development Workflow and Quality Gates
 
 Specifications MUST define bounded, independently understandable work and document meaningful
-dependencies explicitly. Before considering a specification complete, contributors MUST review it
-and its implementation for compliance with this constitution, update relevant roadmap items, and
-record newly discovered nonessential work in `docs/roadmap.md`. Quality checks MUST be proportionate
-to the change but may not be bypassed merely for convenience. Exceptions require an explicit,
-justified statement in the relevant specification.
+dependencies explicitly. Before creating a feature specification, contributors MUST create and
+switch to a dedicated feature branch. Specification, planning, tasking, implementation, and
+feature-specific documentation work MUST occur only on that feature branch until the feature is
+integrated. Before considering a specification complete, contributors MUST review it and its
+implementation for compliance with this constitution, update the roadmap items whose acceptance
+criteria were satisfied, and record newly discovered nonessential work in `docs/roadmap.md`.
+Quality checks MUST be proportionate to the change but may not be bypassed merely for convenience.
+Exceptions require an explicit, justified statement in the relevant specification.
 
 ## Governance
 
@@ -180,4 +178,4 @@ architectural elegance; then realism and technical sophistication. The simplest 
 consistent with these principles prevails; the constitution guides engineering judgement rather
 than creating bureaucracy.
 
-**Version**: 1.0.0 | **Ratified**: 2026-09-05 | **Last Amended**: 2026-09-05
+**Version**: 1.1.0 | **Ratified**: 2026-09-05 | **Last Amended**: 2026-09-05
