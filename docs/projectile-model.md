@@ -31,9 +31,21 @@ fast projectile from tunnelling through the terrain and produces a deterministic
 close to the visible surface.
 
 An impact ends flight in that simulation step and records only a terrain-impact position. The
-projectile has no bounce, penetration, explosion, damage, or terrain-deformation behaviour. A
-shot that leaves the useful simulation volume without an in-bounds terrain crossing instead ends
-without an impact result.
+projectile has no bounce, penetration, gameplay explosion, damage, or terrain-deformation
+behaviour. A shot that leaves the useful simulation volume without an in-bounds terrain crossing
+instead ends without an impact result.
+
+## Impact Presentation
+
+The scene observes the recorded terrain-impact position and creates one bright expanding sphere
+there. Its scale grows over a short explicit visual lifetime before its renderer-owned entity is
+removed. This boom is a deliberately exaggerated presentation effect: its duration and scale are
+not an authoritative explosion radius and cannot affect terrain, tanks, or projectile simulation.
+
+The terrain-impact result persists independently so the small orange marker still identifies the
+exact simulation-resolved point after the boom disappears. A local presentation flag consumes each
+current result once, resets when a new launch clears the result, and therefore permits a later shot
+to boom even when it lands at the same world position.
 
 ## Development Shot
 
@@ -53,9 +65,9 @@ not a final player-facing power scale.
 ## Intentional Boundary
 
 The projectile is rendered as a simple sphere driven entirely by simulation state. It has no mass,
-drag, wind, weapon properties, explosion, damage, or terrain deformation. It stops at terrain
-impact or ends when it leaves the documented simulation volume or reaches its 20-second simulated
-lifetime. A small removable development marker shows the latest terrain-impact position; it does
-not affect simulation.
+drag, wind, weapon properties, gameplay explosion, damage, or terrain deformation. It stops at
+terrain impact or ends when it leaves the documented simulation volume or reaches its 20-second
+simulated lifetime. A small removable development marker shows the latest terrain-impact position;
+it does not affect simulation.
 
 Shot-angle and launch-origin conventions are defined in [world-conventions.md](world-conventions.md).

@@ -33,6 +33,9 @@ const DEVELOPMENT_ELEVATION_DEGREES: f32 = 45.0;
 const DEVELOPMENT_LAUNCH_SPEED: f32 = 18.0;
 const DEVELOPMENT_IMPACT_LAUNCH_SPEED: f32 = 14.0;
 const DEVELOPMENT_GRAVITY: f32 = 8.0;
+const EXPLOSION_VISUAL_DURATION_SECONDS: f32 = 0.6;
+const EXPLOSION_INITIAL_SCALE: f32 = 0.35;
+const EXPLOSION_MAXIMUM_SCALE: f32 = 5.0;
 
 #[derive(Component)]
 struct BattlefieldCamera {
@@ -51,6 +54,11 @@ struct ProjectileFlight(Option<Projectile>);
 #[derive(Resource, Default)]
 struct LatestTerrainImpact(Option<TerrainImpact>);
 
+/// Records whether the persistent latest impact has already created its one presentation effect.
+/// The impact remains available for the diagnostic marker until the next shot clears it.
+#[derive(Resource, Default)]
+struct CurrentImpactExplosionConsumed(bool);
+
 #[derive(Resource)]
 struct BattlefieldGravity(Gravity);
 
@@ -66,11 +74,22 @@ struct ImpactMarkerAssets {
     material: Handle<StandardMaterial>,
 }
 
+#[derive(Resource)]
+struct ExplosionVisualAssets {
+    mesh: Handle<Mesh>,
+    material: Handle<StandardMaterial>,
+}
+
 #[derive(Component)]
 struct ProjectileVisual;
 
 #[derive(Component)]
 struct ImpactMarker;
+
+#[derive(Component)]
+struct ExplosionVisual {
+    elapsed_seconds: f32,
+}
 
 impl Default for BattlefieldCamera {
     fn default() -> Self {
@@ -89,6 +108,7 @@ fn main() {
         .insert_resource(InitialTanks(initial_tanks()))
         .insert_resource(ProjectileFlight::default())
         .insert_resource(LatestTerrainImpact::default())
+        .insert_resource(CurrentImpactExplosionConsumed::default())
         .insert_resource(BattlefieldGravity(
             Gravity::new(DEVELOPMENT_GRAVITY).expect("development gravity must be valid"),
         ))
@@ -101,6 +121,8 @@ fn main() {
                 launch_development_projectile,
                 sync_projectile_visual,
                 sync_impact_marker,
+                sync_terrain_impact_explosion,
+                update_explosion_visuals,
                 draw_world_axes,
             ),
         )
@@ -163,6 +185,14 @@ fn spawn_battlefield_scene(
     commands.insert_resource(ImpactMarkerAssets {
         mesh: meshes.add(Sphere::new(0.18)),
         material: materials.add(Color::srgb(1.0, 0.25, 0.1)),
+    });
+    commands.insert_resource(ExplosionVisualAssets {
+        mesh: meshes.add(Sphere::new(0.5)),
+        material: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.55, 0.05),
+            emissive: Color::srgb(4.0, 1.2, 0.05).into(),
+            ..default()
+        }),
     });
 }
 
@@ -272,6 +302,71 @@ fn sync_impact_marker(
             commands.entity(entity).despawn();
         }
     }
+}
+
+fn sync_terrain_impact_explosion(
+    latest_impact: Res<LatestTerrainImpact>,
+    assets: Res<ExplosionVisualAssets>,
+    mut consumed: ResMut<CurrentImpactExplosionConsumed>,
+    mut commands: Commands,
+) {
+    let Some(impact) = latest_impact.0 else {
+        consumed.0 = false;
+        return;
+    };
+
+    if !should_spawn_explosion(true, consumed.0) {
+        return;
+    }
+
+    commands.spawn((
+        Name::new("Terrain impact explosion"),
+        ExplosionVisual {
+            elapsed_seconds: 0.0,
+        },
+        Mesh3d(assets.mesh.clone()),
+        MeshMaterial3d(assets.material.clone()),
+        explosion_transform(impact.position),
+    ));
+    consumed.0 = true;
+}
+
+fn update_explosion_visuals(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut explosions: Query<(Entity, &mut ExplosionVisual, &mut Transform)>,
+) {
+    for (entity, mut explosion, mut transform) in &mut explosions {
+        explosion.elapsed_seconds += time.delta_secs();
+        if explosion_has_expired(explosion.elapsed_seconds) {
+            commands.entity(entity).despawn();
+        } else {
+            transform.scale = Vec3::splat(explosion_scale(explosion_progress(
+                explosion.elapsed_seconds,
+            )));
+        }
+    }
+}
+
+fn should_spawn_explosion(has_terrain_impact: bool, impact_already_consumed: bool) -> bool {
+    has_terrain_impact && !impact_already_consumed
+}
+
+fn explosion_progress(elapsed_seconds: f32) -> f32 {
+    (elapsed_seconds / EXPLOSION_VISUAL_DURATION_SECONDS).clamp(0.0, 1.0)
+}
+
+fn explosion_scale(progress: f32) -> f32 {
+    EXPLOSION_INITIAL_SCALE + (EXPLOSION_MAXIMUM_SCALE - EXPLOSION_INITIAL_SCALE) * progress
+}
+
+fn explosion_has_expired(elapsed_seconds: f32) -> bool {
+    elapsed_seconds >= EXPLOSION_VISUAL_DURATION_SECONDS
+}
+
+fn explosion_transform(impact_position: WorldPosition) -> Transform {
+    Transform::from_translation(to_bevy_position(impact_position))
+        .with_scale(Vec3::splat(EXPLOSION_INITIAL_SCALE))
 }
 
 fn to_bevy_position(position: WorldPosition) -> Vec3 {
@@ -427,6 +522,72 @@ fn draw_world_axes(mut gizmos: Gizmos) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explosion_lifetime_progress_and_scale_are_explicit_and_bounded() {
+        assert_eq!(explosion_progress(0.0), 0.0);
+        assert_eq!(
+            explosion_scale(explosion_progress(0.0)),
+            EXPLOSION_INITIAL_SCALE
+        );
+
+        let halfway = explosion_progress(EXPLOSION_VISUAL_DURATION_SECONDS / 2.0);
+        assert_eq!(halfway, 0.5);
+        assert_eq!(
+            explosion_scale(halfway),
+            (EXPLOSION_INITIAL_SCALE + EXPLOSION_MAXIMUM_SCALE) / 2.0
+        );
+
+        assert_eq!(explosion_progress(EXPLOSION_VISUAL_DURATION_SECONDS), 1.0);
+        assert_eq!(
+            explosion_scale(explosion_progress(EXPLOSION_VISUAL_DURATION_SECONDS)),
+            EXPLOSION_MAXIMUM_SCALE
+        );
+        assert_eq!(
+            explosion_progress(EXPLOSION_VISUAL_DURATION_SECONDS * 2.0),
+            1.0
+        );
+    }
+
+    #[test]
+    fn explosion_starts_at_the_authoritative_impact_position() {
+        let impact_position = WorldPosition {
+            x: 3.25,
+            y: 1.5,
+            z: -4.75,
+        };
+
+        let transform = explosion_transform(impact_position);
+        assert_eq!(transform.translation, to_bevy_position(impact_position));
+        assert_eq!(transform.scale, Vec3::splat(EXPLOSION_INITIAL_SCALE));
+    }
+
+    #[test]
+    fn explosion_expiry_begins_at_its_configured_duration() {
+        assert!(!explosion_has_expired(
+            EXPLOSION_VISUAL_DURATION_SECONDS - f32::EPSILON
+        ));
+        assert!(explosion_has_expired(EXPLOSION_VISUAL_DURATION_SECONDS));
+    }
+
+    #[test]
+    fn persistent_impact_is_consumed_once_without_marker_state() {
+        assert!(should_spawn_explosion(true, false));
+        assert!(!should_spawn_explosion(true, true));
+        assert!(!should_spawn_explosion(false, false));
+    }
+
+    #[test]
+    fn clearing_an_impact_rearms_an_identical_later_impact() {
+        let consumed_first_impact = should_spawn_explosion(true, false);
+        assert!(consumed_first_impact);
+
+        let consumed_after_launch_clears_impact = false;
+        assert!(should_spawn_explosion(
+            true,
+            consumed_after_launch_clears_impact
+        ));
+    }
 
     #[test]
     fn battlefield_camera_target_stays_within_visible_bounds() {

@@ -9,11 +9,13 @@ fidelity. Ridiculous weapons and strange battlefields are welcome when they make
 
 ## Status
 
-First terrain-impact loop. Azimuth renders two distinct, terrain-grounded tank placeholders on a
+First impact-feedback loop. Azimuth renders two distinct, terrain-grounded tank placeholders on a
 bounded non-flat battlefield and can fire one visible deterministic development projectile through
-a configurable gravity field. A projectile stops at the visible terrain surface and leaves a simple
-development impact marker. It still has no explosion, damage, terrain deformation, aiming UI,
-movement, turns, audio content, or networking.
+a configurable gravity field. A projectile stops at the visible terrain surface, leaves a simple
+development impact marker, and triggers a brief expanding visual boom at the simulation-resolved
+impact position. The boom is presentation only: it causes no damage or terrain change. Azimuth
+still has no gameplay explosion, terrain deformation, aiming UI, movement, turns, audio content,
+or networking.
 
 ## Prerequisites
 
@@ -69,7 +71,8 @@ The current camera is a development inspection tool, not the final gameplay came
 - Use WASD or arrow keys to pan across the battlefield.
 - Press Space to fire one fixed development shot from Player One. Further presses are ignored until
   that projectile impacts terrain or leaves its simulation volume. A small orange marker shows the
-  latest terrain-impact position and clears when the next shot launches.
+  latest terrain-impact position and clears when the next shot launches. A bright temporary boom
+  expands from that same authoritative position; its disappearance does not remove the marker.
 - Press I to fire a shorter fixed development impact shot. It is an inspection aid that lands
   within the current battlefield; it is not an aiming control.
 

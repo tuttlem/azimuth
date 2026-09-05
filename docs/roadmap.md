@@ -22,7 +22,7 @@ These milestones represent the current intended development path.
 * [x] Render two placeholder tanks/entities.
 * [x] Launch a projectile through a configurable gravity field.
 * [x] Detect projectile impact with the battlefield.
-* [ ] Produce a visible impact/explosion.
+* [x] Produce a visible impact/explosion.
 * [ ] Deform terrain at the impact point.
 * [ ] Add basic aiming controls: azimuth, elevation, and power.
 * [ ] Implement a minimal turn loop.
@@ -569,7 +569,7 @@ Explosions should be satisfying visually and mechanically.
 
 ## Presentation
 
-* [ ] Explosion visual effect.
+* [x] Explosion visual effect.
 * [ ] Terrain debris.
 * [ ] Smoke.
 * [ ] Camera response.
