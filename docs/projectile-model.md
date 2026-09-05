@@ -31,9 +31,22 @@ fast projectile from tunnelling through the terrain and produces a deterministic
 close to the visible surface.
 
 An impact ends flight in that simulation step and records only a terrain-impact position. The
-projectile has no bounce, penetration, gameplay explosion, damage, or terrain-deformation
-behaviour. A shot that leaves the useful simulation volume without an in-bounds terrain crossing
-instead ends without an impact result.
+projectile has no bounce, penetration, or damage behaviour. That same authoritative impact
+immediately applies a permanent gameplay crater to the current battlefield. A shot that leaves the
+useful simulation volume without an in-bounds terrain crossing instead ends without an impact
+result or crater.
+
+## Terrain Deformation
+
+The battlefield owns one mutable grid of vertex elevations. Its current triangle interpolation is
+used for rendered mesh positions, terrain-height queries, and every later swept projectile check.
+Each impact lowers current grid vertices inside the default crater radius using
+`depth * (1 - distance² / radius²)²`; the result is deepest at the centre and reaches zero at the
+edge. Overlapping impacts subtract from the already-deformed terrain, and edge craters are clipped
+to valid grid vertices.
+
+Crater radius and depth are explicit gameplay parameters, independent of the visual boom. Tanks
+remain at their startup poses when terrain changes in this feature.
 
 ## Impact Presentation
 

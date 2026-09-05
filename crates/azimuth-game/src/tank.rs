@@ -1,4 +1,4 @@
-use crate::battlefield::{is_within_bounds, terrain_height};
+use crate::battlefield::{BattlefieldTerrain, is_within_bounds};
 use crate::world::WorldPosition;
 
 const FIRING_ORIGIN_FORWARD_OFFSET: f32 = 2.1;
@@ -49,6 +49,7 @@ pub struct Tank {
 
 impl Tank {
     fn on_terrain(
+        terrain: &BattlefieldTerrain,
         owner: PlayerId,
         horizontal_position: HorizontalPosition,
         body_forward: HorizontalDirection,
@@ -64,7 +65,7 @@ impl Tank {
             pose: TankPose {
                 position: WorldPosition {
                     x: horizontal_position.x,
-                    y: terrain_height(horizontal_position.x, horizontal_position.z),
+                    y: terrain.height(horizontal_position.x, horizontal_position.z),
                     z: horizontal_position.z,
                 },
                 body_forward,
@@ -82,18 +83,20 @@ impl Tank {
     }
 }
 
-pub fn initial_tanks() -> [Tank; 2] {
+pub fn initial_tanks(terrain: &BattlefieldTerrain) -> [Tank; 2] {
     let player_one_direction = HorizontalDirection::new(3.0, 2.0);
     let player_two_direction = HorizontalDirection::new(-3.0, -2.0);
 
     [
         Tank::on_terrain(
+            terrain,
             PlayerId::One,
             HorizontalPosition { x: -12.0, z: -8.0 },
             player_one_direction,
             player_one_direction,
         ),
         Tank::on_terrain(
+            terrain,
             PlayerId::Two,
             HorizontalPosition { x: 12.0, z: 8.0 },
             player_two_direction,
@@ -108,7 +111,8 @@ mod tests {
 
     #[test]
     fn initial_tanks_have_distinct_in_bounds_terrain_resolved_spawns() {
-        let [first, second] = initial_tanks();
+        let terrain = BattlefieldTerrain::initial();
+        let [first, second] = initial_tanks(&terrain);
 
         assert_ne!(first.owner, second.owner);
         assert_ne!(first.pose.position, second.pose.position);
@@ -117,14 +121,15 @@ mod tests {
             assert!(is_within_bounds(tank.pose.position.x, tank.pose.position.z));
             assert_eq!(
                 tank.pose.position.y,
-                terrain_height(tank.pose.position.x, tank.pose.position.z)
+                terrain.height(tank.pose.position.x, tank.pose.position.z)
             );
         }
     }
 
     #[test]
     fn firing_origin_is_above_and_ahead_of_the_turret() {
-        for tank in initial_tanks() {
+        let terrain = BattlefieldTerrain::initial();
+        for tank in initial_tanks(&terrain) {
             let origin = tank.firing_origin();
             let offset_x = origin.x - tank.pose.position.x;
             let offset_z = origin.z - tank.pose.position.z;
@@ -141,5 +146,26 @@ mod tests {
         let direction = HorizontalDirection::new(3.0, 4.0);
 
         assert!((direction.x * direction.x + direction.z * direction.z - 1.0).abs() < 0.000_001);
+    }
+
+    #[test]
+    fn existing_tanks_do_not_move_when_terrain_changes_after_startup() {
+        let terrain = BattlefieldTerrain::initial();
+        let tanks = initial_tanks(&terrain);
+        let mut changed_terrain = terrain.clone();
+        changed_terrain.apply_crater(
+            WorldPosition {
+                x: -12.0,
+                y: 0.0,
+                z: -8.0,
+            },
+            crate::battlefield::Crater::default_development(),
+        );
+
+        assert_eq!(tanks[0].pose.position.y, terrain.height(-12.0, -8.0));
+        assert_ne!(
+            tanks[0].pose.position.y,
+            changed_terrain.height(-12.0, -8.0)
+        );
     }
 }

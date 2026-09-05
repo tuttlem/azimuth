@@ -36,9 +36,10 @@ They describe Azimuth's game world rather than a rendering API's coordinate nami
 - The first projectile simulation has a generous useful volume: X and Z must remain within 60
   units of the origin, Y must remain from -30 through 100, and flight lasts at most 20 simulated
   seconds.
-- The visible battlefield terrain is bounded from -20 to +20 on X and Z. It is a 20-by-20 grid of
-  rendered triangles whose piecewise planar surface is authoritative for local terrain height,
-  tank placement, and projectile intersection.
+- The visible battlefield terrain is bounded from -20 to +20 on X and Z. It is a mutable 20-by-20
+  grid of rendered triangles whose current piecewise planar surface is authoritative for local
+  terrain height, initial tank placement, and projectile intersection. Impacts permanently lower
+  that surface; tanks do not yet settle onto later terrain changes.
 - A projectile that travels from above to on or below that in-bounds terrain surface during a fixed
   step impacts it. The impact point is refined deterministically along that travelled segment and
   ends flight; a lightweight development marker displays the result.

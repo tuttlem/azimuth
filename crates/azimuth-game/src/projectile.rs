@@ -139,12 +139,15 @@ impl Projectile {
     /// Advances one fixed step and resolves an in-bounds terrain crossing along the travelled
     /// segment. Twenty-four bisection iterations make the contact precise enough for the compact
     /// battlefield while keeping work and results fixed for deterministic simulation.
-    pub fn advance_with_terrain(
+    pub fn advance_with_terrain<F>(
         &mut self,
         gravity: Gravity,
         limits: SimulationLimits,
-        terrain_height: fn(f32, f32) -> Option<f32>,
-    ) -> ProjectileAdvance {
+        terrain_height: F,
+    ) -> ProjectileAdvance
+    where
+        F: Fn(f32, f32) -> Option<f32>,
+    {
         let previous_position = self.position;
         let acceleration = gravity.acceleration();
         let step = FIXED_STEP_SECONDS;
@@ -181,11 +184,14 @@ impl Projectile {
     }
 }
 
-fn refine_terrain_impact(
+fn refine_terrain_impact<F>(
     mut above: WorldPosition,
     mut below: WorldPosition,
-    terrain_height: fn(f32, f32) -> Option<f32>,
-) -> WorldPosition {
+    terrain_height: F,
+) -> WorldPosition
+where
+    F: Fn(f32, f32) -> Option<f32>,
+{
     for _ in 0..24 {
         let midpoint = interpolate_position(above, below, 0.5);
         let height = terrain_height(midpoint.x, midpoint.z)
@@ -738,7 +744,8 @@ mod tests {
 
     #[test]
     fn fixed_development_impact_shot_hits_the_non_flat_battlefield() {
-        let tank = crate::tank::initial_tanks()[0];
+        let terrain = crate::battlefield::BattlefieldTerrain::initial();
+        let tank = crate::tank::initial_tanks(&terrain)[0];
         let azimuth = azimuth_from_horizontal_direction(
             tank.pose.turret_forward.x,
             tank.pose.turret_forward.z,
@@ -753,7 +760,7 @@ mod tests {
                 match projectile.advance_with_terrain(
                     Gravity::new(8.0).unwrap(),
                     SimulationLimits::DEVELOPMENT,
-                    crate::battlefield::terrain_height_if_within_bounds,
+                    |x, z| terrain.height_if_within_bounds(x, z),
                 ) {
                     ProjectileAdvance::Active => None,
                     outcome => Some(outcome),
@@ -765,10 +772,77 @@ mod tests {
             panic!("fixed development impact shot must hit terrain, got {outcome:?}");
         };
         assert!(
-            (impact.position.y
-                - crate::battlefield::terrain_height(impact.position.x, impact.position.z))
-            .abs()
-                < 0.01
+            (impact.position.y - terrain.height(impact.position.x, impact.position.z)).abs() < 0.01
         );
+    }
+
+    #[test]
+    fn crater_removed_space_does_not_collide_with_the_old_surface() {
+        let mut terrain = crate::battlefield::BattlefieldTerrain::initial();
+        let old_height = terrain.height(0.0, 0.0);
+        terrain.apply_crater(
+            WorldPosition {
+                x: 0.0,
+                y: old_height,
+                z: 0.0,
+            },
+            crate::battlefield::Crater::default_development(),
+        );
+        let mut projectile = Projectile {
+            position: WorldPosition {
+                x: 0.0,
+                y: old_height + 0.1,
+                z: 0.0,
+            },
+            velocity: WorldVector {
+                y: -1.0,
+                ..WorldVector::ZERO
+            },
+            elapsed_steps: 0,
+        };
+        assert_eq!(
+            projectile.advance_with_terrain(
+                Gravity::new(0.0).unwrap(),
+                generous_limits(),
+                |x, z| terrain.height_if_within_bounds(x, z)
+            ),
+            ProjectileAdvance::Active
+        );
+    }
+
+    #[test]
+    fn projectile_impacts_the_lower_crater_surface() {
+        let mut terrain = crate::battlefield::BattlefieldTerrain::initial();
+        let old_height = terrain.height(0.0, 0.0);
+        terrain.apply_crater(
+            WorldPosition {
+                x: 0.0,
+                y: old_height,
+                z: 0.0,
+            },
+            crate::battlefield::Crater::default_development(),
+        );
+        let new_height = terrain.height(0.0, 0.0);
+        let mut projectile = Projectile {
+            position: WorldPosition {
+                x: 0.0,
+                y: new_height + 1.0,
+                z: 0.0,
+            },
+            velocity: WorldVector {
+                y: -240.0,
+                ..WorldVector::ZERO
+            },
+            elapsed_steps: 0,
+        };
+        assert!(matches!(
+            projectile.advance_with_terrain(
+                Gravity::new(0.0).unwrap(),
+                generous_limits(),
+                |x, z| terrain.height_if_within_bounds(x, z)
+            ),
+            ProjectileAdvance::TerrainImpact(_)
+        ));
+        assert_close(projectile.position.y, new_height);
     }
 }

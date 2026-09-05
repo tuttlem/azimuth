@@ -23,7 +23,7 @@ These milestones represent the current intended development path.
 * [x] Launch a projectile through a configurable gravity field.
 * [x] Detect projectile impact with the battlefield.
 * [x] Produce a visible impact/explosion.
-* [ ] Deform terrain at the impact point.
+* [x] Deform terrain at the impact point.
 * [ ] Add basic aiming controls: azimuth, elevation, and power.
 * [ ] Implement a minimal turn loop.
 * [ ] Implement the move-or-fire decision.
@@ -316,14 +316,14 @@ Explosions should change the tactical battlefield, not merely create visual effe
 
 ## Craters
 
-* [ ] Create terrain deformation at projectile impact.
-* [ ] Generate a basic crater.
-* [ ] Parameterise crater radius.
-* [ ] Parameterise crater depth.
-* [ ] Ensure terrain deformation remains stable.
-* [ ] Update collision geometry after deformation.
+* [x] Create terrain deformation at projectile impact.
+* [x] Generate a basic crater.
+* [x] Parameterise crater radius.
+* [x] Parameterise crater depth.
+* [x] Ensure terrain deformation remains stable.
+* [x] Update collision geometry after deformation.
 * [ ] Update tank positioning where terrain changes underneath them.
-* [ ] Ensure subsequent projectiles interact with deformed terrain.
+* [x] Ensure subsequent projectiles interact with deformed terrain.
 
 ## Tactical Effects
 
@@ -331,7 +331,7 @@ Explosions should change the tactical battlefield, not merely create visual effe
 * [ ] Craters can expose previously protected players.
 * [ ] Craters can obstruct movement.
 * [ ] Craters can trap players where appropriate.
-* [ ] Terrain deformation can alter future projectile lines.
+* [x] Terrain deformation can alter future projectile lines.
 * [ ] Repeated impacts can substantially reshape a battlefield.
 
 ## Advanced Terrain Effects
@@ -562,7 +562,7 @@ Explosions should be satisfying visually and mechanically.
 * [ ] Explosion radius.
 * [ ] Damage falloff.
 * [ ] Direct impact behaviour.
-* [ ] Terrain deformation.
+* [x] Terrain deformation.
 * [ ] Force/impulse effects if useful.
 * [ ] Chain reactions if introduced later.
 * [ ] Weapon-specific explosion profiles.

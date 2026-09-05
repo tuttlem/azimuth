@@ -5,9 +5,7 @@ mod world;
 
 use std::f32::consts::FRAC_PI_2;
 
-use battlefield::{
-    HALF_EXTENT, terrain_height_if_within_bounds, terrain_mesh_indices, terrain_mesh_positions,
-};
+use battlefield::{BattlefieldTerrain, Crater, HALF_EXTENT, terrain_mesh_indices};
 use bevy::{
     asset::RenderAssetUsages,
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
@@ -48,6 +46,9 @@ struct BattlefieldCamera {
 #[derive(Resource)]
 struct InitialTanks([Tank; 2]);
 
+#[derive(Resource)]
+struct BattlefieldState(BattlefieldTerrain);
+
 #[derive(Resource, Default)]
 struct ProjectileFlight(Option<Projectile>);
 
@@ -87,6 +88,9 @@ struct ProjectileVisual;
 struct ImpactMarker;
 
 #[derive(Component)]
+struct BattlefieldVisual;
+
+#[derive(Component)]
 struct ExplosionVisual {
     elapsed_seconds: f32,
 }
@@ -103,9 +107,12 @@ impl Default for BattlefieldCamera {
 }
 
 fn main() {
+    let terrain = BattlefieldTerrain::initial();
+    let tanks = initial_tanks(&terrain);
     App::new()
         .add_plugins(DefaultPlugins)
-        .insert_resource(InitialTanks(initial_tanks()))
+        .insert_resource(InitialTanks(tanks))
+        .insert_resource(BattlefieldState(terrain))
         .insert_resource(ProjectileFlight::default())
         .insert_resource(LatestTerrainImpact::default())
         .insert_resource(CurrentImpactExplosionConsumed::default())
@@ -123,6 +130,7 @@ fn main() {
                 sync_impact_marker,
                 sync_terrain_impact_explosion,
                 update_explosion_visuals,
+                sync_battlefield_mesh,
                 draw_world_axes,
             ),
         )
@@ -135,13 +143,15 @@ fn spawn_battlefield_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     tanks: Res<InitialTanks>,
+    terrain: Res<BattlefieldState>,
 ) {
     let camera = BattlefieldCamera::default();
     let transform = camera_transform(&camera);
     commands.spawn((Camera3d::default(), camera, transform));
 
     commands.spawn((
-        Mesh3d(meshes.add(create_battlefield_mesh())),
+        BattlefieldVisual,
+        Mesh3d(meshes.add(create_battlefield_mesh(&terrain.0))),
         MeshMaterial3d(materials.add(Color::srgb(0.2, 0.42, 0.2))),
     ));
 
@@ -242,6 +252,7 @@ fn launch_development_projectile(
 
 fn advance_projectile(
     gravity: Res<BattlefieldGravity>,
+    mut terrain: ResMut<BattlefieldState>,
     mut flight: ResMut<ProjectileFlight>,
     mut latest_impact: ResMut<LatestTerrainImpact>,
 ) {
@@ -249,17 +260,33 @@ fn advance_projectile(
         return;
     };
 
-    match projectile.advance_with_terrain(
-        gravity.0,
-        SimulationLimits::DEVELOPMENT,
-        terrain_height_if_within_bounds,
-    ) {
+    match projectile.advance_with_terrain(gravity.0, SimulationLimits::DEVELOPMENT, |x, z| {
+        terrain.0.height_if_within_bounds(x, z)
+    }) {
         ProjectileAdvance::Active => flight.0 = Some(projectile),
         ProjectileAdvance::TerrainImpact(impact) => {
+            terrain
+                .0
+                .apply_crater(impact.position, Crater::default_development());
             latest_impact.0 = Some(impact);
             flight.0 = None;
         }
         ProjectileAdvance::OutOfBounds => flight.0 = None,
+    }
+}
+
+fn sync_battlefield_mesh(
+    terrain: Res<BattlefieldState>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    visuals: Query<&Mesh3d, With<BattlefieldVisual>>,
+) {
+    if !terrain.is_changed() {
+        return;
+    }
+    for mesh_handle in &visuals {
+        if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
+            *mesh = create_battlefield_mesh(&terrain.0);
+        }
     }
 }
 
@@ -505,12 +532,12 @@ fn clamp_camera_target(target: Vec3) -> Vec3 {
     )
 }
 
-fn create_battlefield_mesh() -> Mesh {
+fn create_battlefield_mesh(terrain: &BattlefieldTerrain) -> Mesh {
     Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     )
-    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, terrain_mesh_positions())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, terrain.mesh_positions())
     .with_inserted_indices(Indices::U32(terrain_mesh_indices()))
     .with_computed_smooth_normals()
 }
