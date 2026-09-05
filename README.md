@@ -9,8 +9,9 @@ fidelity. Ridiculous weapons and strange battlefields are welcome when they make
 
 ## Status
 
-Rendering technology proof. Azimuth now opens a minimal Bevy 3D scene, but has no gameplay,
-physics, terrain system, camera controls, audio content, or networking.
+Minimal 3D battlefield and development camera. Azimuth now renders a bounded placeholder
+battlefield with visible relief that can be inspected with direct camera controls. It still has no
+gameplay, physics, terrain system, audio content, or networking.
 
 ## Prerequisites
 
@@ -28,7 +29,7 @@ cargo check --workspace --all-targets
 # Full workspace build
 cargo build --workspace
 
-# Run the minimal 3D rendering proof
+# Run the minimal 3D battlefield
 cargo run --package azimuth-game
 
 # Complete workspace test suite
@@ -56,6 +57,16 @@ Use readable standard Rust unit tests by default. When simulation work arrives, 
 deterministic, reproducible inputs and explicitly control randomness. Add readable regression tests
 for meaningful gameplay bugs where practical; introduce integration-test support only when a real
 external interface warrants it.
+
+## Battlefield Controls
+
+The current camera is a development inspection tool, not the final gameplay camera:
+
+- Hold the right mouse button and drag to orbit the battlefield.
+- Scroll the mouse wheel to move closer to or farther from it.
+- Use WASD or arrow keys to pan across the battlefield.
+
+The initial world-space reference is documented in [docs/world-conventions.md](docs/world-conventions.md).
 
 ## Automation
 

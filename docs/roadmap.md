@@ -18,7 +18,7 @@ These milestones represent the current intended development path.
 
 * [x] Establish the Rust workspace and repository foundation.
 * [x] Select the initial rendering/game technology deliberately.
-* [ ] Render a minimal 3D battlefield.
+* [x] Render a minimal 3D battlefield.
 * [ ] Render two placeholder tanks/entities.
 * [ ] Launch a projectile through a configurable gravity field.
 * [ ] Detect projectile impact with the battlefield.
@@ -108,12 +108,12 @@ Selection of rendering/game technology should be an explicit architectural decis
 ## Initial Rendering
 
 * [x] Open a game window.
-* [ ] Establish a controllable 3D camera.
+* [x] Establish a controllable 3D camera.
 * [x] Render a simple ground plane.
-* [ ] Render simple placeholder battlefield geometry.
+* [x] Render simple placeholder battlefield geometry.
 * [ ] Render simple placeholder tank/player geometry.
 * [ ] Render a projectile.
-* [ ] Establish basic debug visualisation capabilities.
+* [x] Establish basic debug visualisation capabilities.
 
 ---
 
@@ -122,13 +122,13 @@ Selection of rendering/game technology should be an explicit architectural decis
 A clear and consistent world model is required before projectile and terrain systems become complicated.
 
 * [ ] Define Azimuth's world coordinate conventions.
-* [ ] Define which axis represents vertical elevation.
-* [ ] Define world units.
+* [x] Define which axis represents vertical elevation.
+* [x] Define world units.
 * [ ] Define angular conventions.
 * [ ] Define azimuth orientation and zero direction.
 * [ ] Define elevation-angle conventions.
 * [ ] Define projectile launch position conventions.
-* [ ] Define battlefield bounds.
+* [x] Define battlefield bounds.
 * [ ] Decide how out-of-bounds projectiles are handled.
 * [ ] Document conventions sufficiently for physics and rendering code to agree.
 * [ ] Avoid engine-specific coordinate assumptions leaking unnecessarily into game-domain logic.
@@ -276,13 +276,13 @@ Terrain should affect both aiming and tactical position.
 ## Basic Terrain
 
 * [ ] Define initial battlefield representation.
-* [ ] Render non-flat terrain.
-* [ ] Support meaningful elevation changes.
+* [x] Render non-flat terrain.
+* [x] Support meaningful elevation changes.
 * [ ] Detect projectile intersection with terrain.
 * [ ] Position tanks correctly on terrain.
 * [ ] Determine local terrain height.
 * [ ] Determine local terrain slope.
-* [ ] Establish battlefield boundaries.
+* [x] Establish battlefield boundaries.
 
 ## Terrain Generation
 
@@ -753,9 +753,9 @@ Watching the shot is part of the game.
 
 ## Battlefield Camera
 
-* [ ] Orbit battlefield.
-* [ ] Pan.
-* [ ] Zoom.
+* [x] Orbit battlefield.
+* [x] Pan.
+* [x] Zoom.
 * [ ] Focus current player.
 * [ ] Focus selected target area where useful.
 
@@ -1007,8 +1007,8 @@ These are conceptual milestones rather than fixed specification sequences.
 
 ## Milestone B — First Arc
 
-* [ ] Game window opens.
-* [ ] Basic 3D world renders.
+* [x] Game window opens.
+* [x] Basic 3D world renders.
 * [ ] Projectile can be launched.
 * [ ] Configurable gravity affects it.
 * [ ] Projectile flight is visible.
