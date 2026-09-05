@@ -20,7 +20,7 @@ These milestones represent the current intended development path.
 * [x] Select the initial rendering/game technology deliberately.
 * [x] Render a minimal 3D battlefield.
 * [x] Render two placeholder tanks/entities.
-* [ ] Launch a projectile through a configurable gravity field.
+* [x] Launch a projectile through a configurable gravity field.
 * [ ] Detect projectile impact with the battlefield.
 * [ ] Produce a visible impact/explosion.
 * [ ] Deform terrain at the impact point.
@@ -112,7 +112,7 @@ Selection of rendering/game technology should be an explicit architectural decis
 * [x] Render a simple ground plane.
 * [x] Render simple placeholder battlefield geometry.
 * [x] Render simple placeholder tank/player geometry.
-* [ ] Render a projectile.
+* [x] Render a projectile.
 * [x] Establish basic debug visualisation capabilities.
 
 ---
@@ -121,17 +121,17 @@ Selection of rendering/game technology should be an explicit architectural decis
 
 A clear and consistent world model is required before projectile and terrain systems become complicated.
 
-* [ ] Define Azimuth's world coordinate conventions.
+* [x] Define Azimuth's world coordinate conventions.
 * [x] Define which axis represents vertical elevation.
 * [x] Define world units.
-* [ ] Define angular conventions.
-* [ ] Define azimuth orientation and zero direction.
-* [ ] Define elevation-angle conventions.
-* [ ] Define projectile launch position conventions.
+* [x] Define angular conventions.
+* [x] Define azimuth orientation and zero direction.
+* [x] Define elevation-angle conventions.
+* [x] Define projectile launch position conventions.
 * [x] Define battlefield bounds.
-* [ ] Decide how out-of-bounds projectiles are handled.
-* [ ] Document conventions sufficiently for physics and rendering code to agree.
-* [ ] Avoid engine-specific coordinate assumptions leaking unnecessarily into game-domain logic.
+* [x] Decide how out-of-bounds projectiles are handled.
+* [x] Document conventions sufficiently for physics and rendering code to agree.
+* [x] Avoid engine-specific coordinate assumptions leaking unnecessarily into game-domain logic.
 
 ---
 
@@ -143,22 +143,22 @@ The objective is understandable, reproducible, tuneable behaviour rather than ma
 
 ## Basic Motion
 
-* [ ] Represent projectile position in 3D.
-* [ ] Represent projectile velocity in 3D.
-* [ ] Convert player azimuth, elevation, and power/velocity into a launch vector.
-* [ ] Apply configurable gravity.
-* [ ] Advance projectile motion deterministically.
-* [ ] Establish an appropriate simulation timestep strategy.
-* [ ] Test basic projectile trajectories.
-* [ ] Test symmetry and expected trajectory invariants where useful.
+* [x] Represent projectile position in 3D.
+* [x] Represent projectile velocity in 3D.
+* [x] Convert player azimuth, elevation, and power/velocity into a launch vector.
+* [x] Apply configurable gravity.
+* [x] Advance projectile motion deterministically.
+* [x] Establish an appropriate simulation timestep strategy.
+* [x] Test basic projectile trajectories.
+* [x] Test symmetry and expected trajectory invariants where useful.
 
 ## Projectile Configuration
 
-* [ ] Support configurable launch velocity.
+* [x] Support configurable launch velocity.
 * [ ] Support configurable projectile mass where gameplay requires it.
 * [ ] Support configurable projectile drag characteristics.
 * [ ] Support weapon-specific projectile behaviour without premature abstraction.
-* [ ] Allow projectiles to expose enough information for rendering/debugging.
+* [x] Allow projectiles to expose enough information for rendering/debugging.
 
 ## Trajectory Debugging
 
@@ -176,9 +176,9 @@ Gravity should be a first-class battlefield parameter.
 
 ## Configurable Gravity
 
-* [ ] Support configurable gravitational acceleration.
-* [ ] Keep gravity independent from assumptions about Earth.
-* [ ] Test projectile behaviour under different gravity values.
+* [x] Support configurable gravitational acceleration.
+* [x] Keep gravity independent from assumptions about Earth.
+* [x] Test projectile behaviour under different gravity values.
 * [ ] Establish sensible gameplay ranges.
 * [ ] Prevent pathological environment values from breaking gameplay unexpectedly.
 
@@ -1009,9 +1009,9 @@ These are conceptual milestones rather than fixed specification sequences.
 
 * [x] Game window opens.
 * [x] Basic 3D world renders.
-* [ ] Projectile can be launched.
-* [ ] Configurable gravity affects it.
-* [ ] Projectile flight is visible.
+* [x] Projectile can be launched.
+* [x] Configurable gravity affects it.
+* [x] Projectile flight is visible.
 * [ ] Projectile impacts the battlefield.
 
 **At this point Azimuth should start being fun to work on.**

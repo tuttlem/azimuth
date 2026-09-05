@@ -1,5 +1,7 @@
 mod battlefield;
+mod projectile;
 mod tank;
+mod world;
 
 use std::f32::consts::FRAC_PI_2;
 
@@ -11,7 +13,11 @@ use bevy::{
     prelude::*,
     render::render_resource::PrimitiveTopology,
 };
+use projectile::{
+    Gravity, Projectile, ShotParameters, SimulationLimits, azimuth_from_horizontal_direction,
+};
 use tank::{HorizontalDirection, PlayerId, Tank, initial_tanks};
+use world::WorldPosition;
 
 const TERRAIN_CELLS_PER_SIDE: u32 = 20;
 const CAMERA_MIN_DISTANCE: f32 = 8.0;
@@ -20,6 +26,10 @@ const CAMERA_PAN_SPEED: f32 = 12.0;
 const CAMERA_ORBIT_SENSITIVITY: f32 = 0.005;
 const CAMERA_ZOOM_SPEED: f32 = 2.0;
 const CAMERA_PITCH_LIMIT: f32 = FRAC_PI_2 - 0.1;
+const PROJECTILE_FIXED_HZ: f64 = 120.0;
+const DEVELOPMENT_ELEVATION_DEGREES: f32 = 45.0;
+const DEVELOPMENT_LAUNCH_SPEED: f32 = 18.0;
+const DEVELOPMENT_GRAVITY: f32 = 8.0;
 
 #[derive(Component)]
 struct BattlefieldCamera {
@@ -31,6 +41,21 @@ struct BattlefieldCamera {
 
 #[derive(Resource)]
 struct InitialTanks([Tank; 2]);
+
+#[derive(Resource, Default)]
+struct ProjectileFlight(Option<Projectile>);
+
+#[derive(Resource)]
+struct BattlefieldGravity(Gravity);
+
+#[derive(Resource)]
+struct ProjectileVisualAssets {
+    mesh: Handle<Mesh>,
+    material: Handle<StandardMaterial>,
+}
+
+#[derive(Component)]
+struct ProjectileVisual;
 
 impl Default for BattlefieldCamera {
     fn default() -> Self {
@@ -47,8 +72,22 @@ fn main() {
     App::new()
         .add_plugins(DefaultPlugins)
         .insert_resource(InitialTanks(initial_tanks()))
+        .insert_resource(ProjectileFlight::default())
+        .insert_resource(BattlefieldGravity(
+            Gravity::new(DEVELOPMENT_GRAVITY).expect("development gravity must be valid"),
+        ))
+        .insert_resource(Time::<Fixed>::from_hz(PROJECTILE_FIXED_HZ))
         .add_systems(Startup, spawn_battlefield_scene)
-        .add_systems(Update, (update_battlefield_camera, draw_world_axes))
+        .add_systems(
+            Update,
+            (
+                update_battlefield_camera,
+                launch_development_projectile,
+                sync_projectile_visual,
+                draw_world_axes,
+            ),
+        )
+        .add_systems(FixedUpdate, advance_projectile)
         .run();
 }
 
@@ -99,6 +138,77 @@ fn spawn_battlefield_scene(
             firing_origin_material.clone(),
         );
     }
+
+    commands.insert_resource(ProjectileVisualAssets {
+        mesh: meshes.add(Sphere::new(0.28)),
+        material: materials.add(Color::srgb(1.0, 0.92, 0.35)),
+    });
+}
+
+fn launch_development_projectile(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    tanks: Res<InitialTanks>,
+    assets: Res<ProjectileVisualAssets>,
+    mut flight: ResMut<ProjectileFlight>,
+    mut commands: Commands,
+) {
+    if !keyboard.just_pressed(KeyCode::Space) || flight.0.is_some() {
+        return;
+    }
+
+    let tank = tanks.0[0];
+    let azimuth =
+        azimuth_from_horizontal_direction(tank.pose.turret_forward.x, tank.pose.turret_forward.z)
+            .expect("initial tank turret direction must be valid");
+    let parameters = ShotParameters::new(
+        tank.firing_origin(),
+        azimuth,
+        DEVELOPMENT_ELEVATION_DEGREES,
+        DEVELOPMENT_LAUNCH_SPEED,
+    )
+    .expect("development shot parameters must be valid");
+    let projectile = Projectile::launch(parameters);
+
+    commands.spawn((
+        Name::new("Development projectile"),
+        ProjectileVisual,
+        Mesh3d(assets.mesh.clone()),
+        MeshMaterial3d(assets.material.clone()),
+        Transform::from_translation(to_bevy_position(projectile.position)),
+    ));
+    flight.0 = Some(projectile);
+}
+
+fn advance_projectile(gravity: Res<BattlefieldGravity>, mut flight: ResMut<ProjectileFlight>) {
+    let Some(mut projectile) = flight.0 else {
+        return;
+    };
+
+    if projectile.advance(gravity.0, SimulationLimits::DEVELOPMENT) {
+        flight.0 = Some(projectile);
+    } else {
+        flight.0 = None;
+    }
+}
+
+fn sync_projectile_visual(
+    flight: Res<ProjectileFlight>,
+    mut commands: Commands,
+    mut visuals: Query<(Entity, &mut Transform), With<ProjectileVisual>>,
+) {
+    if let Some(projectile) = flight.0 {
+        for (_, mut transform) in &mut visuals {
+            transform.translation = to_bevy_position(projectile.position);
+        }
+    } else {
+        for (entity, _) in &mut visuals {
+            commands.entity(entity).despawn();
+        }
+    }
+}
+
+fn to_bevy_position(position: WorldPosition) -> Vec3 {
+    Vec3::new(position.x, position.y, position.z)
 }
 
 struct TankMeshes {

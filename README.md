@@ -9,10 +9,10 @@ fidelity. Ridiculous weapons and strange battlefields are welcome when they make
 
 ## Status
 
-Placeholder tanks and player entities. Azimuth now renders two distinct, terrain-grounded tank
-placeholders on a bounded battlefield with visible relief. Their player identities, poses, and
-firing origins are deterministic foundations for later projectile work; it still has no firing,
-gameplay physics, movement, turns, audio content, or networking.
+First deterministic projectile arc. Azimuth now renders two distinct, terrain-grounded tank
+placeholders on a bounded battlefield and can fire one visible development projectile through a
+configurable gravity field. The projectile currently has no terrain collision, impact, aiming UI,
+movement, turns, audio content, or networking.
 
 ## Prerequisites
 
@@ -66,8 +66,12 @@ The current camera is a development inspection tool, not the final gameplay came
 - Hold the right mouse button and drag to orbit the battlefield.
 - Scroll the mouse wheel to move closer to or farther from it.
 - Use WASD or arrow keys to pan across the battlefield.
+- Press Space to fire one fixed development shot from Player One. Further presses are ignored until
+  that projectile leaves its simulation volume.
 
-The initial world-space reference is documented in [docs/world-conventions.md](docs/world-conventions.md).
+World-space and shot-angle conventions are documented in
+[docs/world-conventions.md](docs/world-conventions.md). The fixed-step ballistic model and its
+development defaults are documented in [docs/projectile-model.md](docs/projectile-model.md).
 
 ## Automation
 

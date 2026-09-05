@@ -1,21 +1,43 @@
 # World Conventions
 
-These are the limited conventions Azimuth needs for its first visible battlefield. They provide a
-shared reference for rendering and later work without defining the projectile model prematurely.
+These conventions give rendering, projectile simulation, and later aiming work one shared meaning.
+They describe Azimuth's game world rather than a rendering API's coordinate naming.
 
-## Current Conventions
+## World Space
 
 - **Vertical elevation**: Y is vertical; positive Y points upward.
+- **Horizontal plane**: X and Z form the level battlefield plane.
 - **Battlefield centre**: `(0, 0, 0)` is the centre of the initial battlefield.
 - **Units**: One world-space unit is an abstract game-space unit. It has no real-world metre
   equivalence.
-- **Initial bounds**: The visible battlefield is approximately 40 units wide on X and 40 units deep
-  on Z, centred at the origin. Its horizontal extent is therefore approximately -20 to +20 on both
-  axes.
+- **Initial visible bounds**: The visible battlefield is approximately 40 units wide on X and 40
+  units deep on Z, centred at the origin. Its horizontal extent is approximately -20 to +20 on
+  both axes.
 
-## Deliberately Deferred
+## Shot Angles
 
-This document does not define azimuth orientation or zero direction, elevation-angle conventions,
-launch-vector conversion, projectile spawn position, projectile bounds, or out-of-bounds results.
-Those choices affect gameplay and will be made with the projectile and world-model work that
-requires them.
+- **Azimuth** is a horizontal direction in degrees. Zero degrees points along negative Z.
+- **Positive azimuth** turns clockwise when viewed from above (+Y): 90 degrees points +X, 180
+  degrees points +Z, and 270 degrees points -X.
+- **Elevation** is measured upward from the horizontal plane. Zero degrees is level and 90 degrees
+  points straight upward. The first projectile model accepts the inclusive 0 through 90 degree
+  range; final player-facing aiming limits remain future work.
+- Given azimuth `a` and elevation `e`, both converted from degrees to radians, the launch direction
+  is `(sin(a) * cos(e), sin(e), -cos(a) * cos(e))`. It is a unit direction before launch speed is
+  applied.
+- A tank's normalized horizontal turret direction uses the same convention. Its azimuth is derived
+  as `atan2(x, -z)`, normalized to 0 through less than 360 degrees.
+
+## Projectile Handoff and Lifetime
+
+- A projectile begins exactly at its tank's derived firing origin: the point ahead of and above the
+  tank body at the placeholder barrel end. The firing-origin marker is a visual reference for that
+  same domain point.
+- The first projectile simulation has a generous useful volume: X and Z must remain within 60
+  units of the origin, Y must remain from -30 through 100, and flight lasts at most 20 simulated
+  seconds.
+- Leaving one of those limits ends the current development flight. Crossing visible terrain does
+  **not** end a flight yet; terrain impact is a separate feature.
+
+See [projectile-model.md](projectile-model.md) for the deterministic fixed-step motion model and
+development defaults.

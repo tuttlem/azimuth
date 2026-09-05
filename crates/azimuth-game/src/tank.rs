@@ -1,4 +1,5 @@
 use crate::battlefield::{is_within_bounds, terrain_height};
+use crate::world::WorldPosition;
 
 const FIRING_ORIGIN_FORWARD_OFFSET: f32 = 2.1;
 const FIRING_ORIGIN_HEIGHT: f32 = 1.0;
@@ -12,13 +13,6 @@ pub enum PlayerId {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HorizontalPosition {
     pub x: f32,
-    pub z: f32,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct WorldPosition {
-    pub x: f32,
-    pub y: f32,
     pub z: f32,
 }
 
