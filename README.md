@@ -9,9 +9,8 @@ fidelity. Ridiculous weapons and strange battlefields are welcome when they make
 
 ## Status
 
-Project foundation. The repository currently provides a small, dependency-free Rust workspace and
-does not yet include rendering, an engine, physics, terrain, gameplay, audio, networking, or a
-gameplay technology decision.
+Rendering technology proof. Azimuth now opens a minimal Bevy 3D scene, but has no gameplay,
+physics, terrain system, camera controls, audio content, or networking.
 
 ## Prerequisites
 
@@ -29,7 +28,7 @@ cargo check --workspace --all-targets
 # Full workspace build
 cargo build --workspace
 
-# Run the current foundation executable
+# Run the minimal 3D rendering proof
 cargo run --package azimuth-game
 
 # Complete workspace test suite
@@ -70,3 +69,6 @@ collaboration needs establish a concrete benefit.
 and project metadata. Future sibling crates, such as `azimuth-math` or a physics crate, will be
 introduced only when a concrete dependency, testability, reuse, or ownership boundary justifies
 them.
+
+See [the rendering technology decision](docs/adr/0001-initial-rendering-technology.md) for the Bevy rationale and
+its trade-offs.

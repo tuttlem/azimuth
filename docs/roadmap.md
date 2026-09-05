@@ -17,7 +17,7 @@ Completed work should be checked off as its acceptance criteria are satisfied.
 These milestones represent the current intended development path.
 
 * [x] Establish the Rust workspace and repository foundation.
-* [ ] Select the initial rendering/game technology deliberately.
+* [x] Select the initial rendering/game technology deliberately.
 * [ ] Render a minimal 3D battlefield.
 * [ ] Render two placeholder tanks/entities.
 * [ ] Launch a projectile through a configurable gravity field.
@@ -95,21 +95,21 @@ Selection of rendering/game technology should be an explicit architectural decis
 
 ## Technology Evaluation
 
-* [ ] Define the minimum technical requirements for Azimuth's first playable version.
-* [ ] Evaluate whether a game engine is appropriate.
-* [ ] Evaluate Bevy.
-* [ ] Evaluate lower-level alternatives where useful.
-* [ ] Consider direct `wgpu`-based rendering only if the additional complexity provides clear value.
-* [ ] Consider input, camera, UI, audio, asset handling, and terrain requirements during evaluation.
-* [ ] Consider build complexity and dependency footprint.
-* [ ] Prefer the technology that keeps the project understandable and fun to develop.
-* [ ] Record the rendering/game technology decision.
+* [x] Define the minimum technical requirements for Azimuth's first playable version.
+* [x] Evaluate whether a game engine is appropriate.
+* [x] Evaluate Bevy.
+* [x] Evaluate lower-level alternatives where useful.
+* [x] Consider direct `wgpu`-based rendering only if the additional complexity provides clear value.
+* [x] Consider input, camera, UI, audio, asset handling, and terrain requirements during evaluation.
+* [x] Consider build complexity and dependency footprint.
+* [x] Prefer the technology that keeps the project understandable and fun to develop.
+* [x] Record the rendering/game technology decision.
 
 ## Initial Rendering
 
-* [ ] Open a game window.
+* [x] Open a game window.
 * [ ] Establish a controllable 3D camera.
-* [ ] Render a simple ground plane.
+* [x] Render a simple ground plane.
 * [ ] Render simple placeholder battlefield geometry.
 * [ ] Render simple placeholder tank/player geometry.
 * [ ] Render a projectile.
@@ -999,11 +999,11 @@ These are conceptual milestones rather than fixed specification sequences.
 
 ## Milestone A — Foundation
 
-* [ ] Rust workspace exists.
-* [ ] Repository builds cleanly.
-* [ ] Tests and quality checks run successfully.
-* [ ] Documentation and roadmap exist.
-* [ ] SpecKit workflow is established.
+* [x] Rust workspace exists.
+* [x] Repository builds cleanly.
+* [x] Tests and quality checks run successfully.
+* [x] Documentation and roadmap exist.
+* [x] SpecKit workflow is established.
 
 ## Milestone B — First Arc
 
