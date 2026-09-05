@@ -17,6 +17,15 @@ pub enum PlayerId {
     Two,
 }
 
+impl PlayerId {
+    pub fn other(self) -> Self {
+        match self {
+            Self::One => Self::Two,
+            Self::Two => Self::One,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct HorizontalPosition {
     pub x: f32,
@@ -81,6 +90,7 @@ impl Tank {
         }
     }
 
+    #[cfg(test)]
     pub fn firing_origin(self) -> WorldPosition {
         WorldPosition {
             x: self.pose.position.x + self.pose.turret_forward.x * FIRING_ORIGIN_FORWARD_OFFSET,
@@ -150,10 +160,36 @@ mod tests {
     }
 
     #[test]
+    fn the_two_fixed_players_alternate_directly() {
+        assert_eq!(PlayerId::One.other(), PlayerId::Two);
+        assert_eq!(PlayerId::Two.other(), PlayerId::One);
+    }
+
+    #[test]
     fn firing_origin_is_above_and_ahead_of_the_turret() {
         let terrain = BattlefieldTerrain::initial();
         for tank in initial_tanks(&terrain) {
-            let origin = tank.firing_origin();
+            let azimuth = crate::projectile::azimuth_from_horizontal_direction(
+                tank.pose.turret_forward.x,
+                tank.pose.turret_forward.z,
+            )
+            .unwrap();
+            let origin = tank
+                .firing_representation(
+                    crate::projectile::ShotParameters::new(
+                        WorldPosition {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                        azimuth,
+                        0.0,
+                        1.0,
+                    )
+                    .unwrap()
+                    .launch_direction(),
+                )
+                .muzzle_position;
             let offset_x = origin.x - tank.pose.position.x;
             let offset_z = origin.z - tank.pose.position.z;
             let forward_distance =
@@ -193,7 +229,7 @@ mod tests {
     }
 
     #[test]
-    fn level_firing_representation_matches_existing_firing_origin() {
+    fn level_firing_representation_is_above_and_ahead_of_the_turret() {
         let terrain = BattlefieldTerrain::initial();
         let tank = initial_tanks(&terrain)[0];
         let azimuth = crate::projectile::azimuth_from_horizontal_direction(
@@ -202,12 +238,28 @@ mod tests {
         )
         .unwrap();
         let representation = tank.firing_representation(
-            crate::projectile::ShotParameters::new(tank.firing_origin(), azimuth, 0.0, 1.0)
-                .unwrap()
-                .launch_direction(),
+            crate::projectile::ShotParameters::new(
+                WorldPosition {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                azimuth,
+                0.0,
+                1.0,
+            )
+            .unwrap()
+            .launch_direction(),
         );
 
-        assert_eq!(representation.muzzle_position, tank.firing_origin());
+        assert_eq!(
+            representation.muzzle_position,
+            WorldPosition {
+                x: tank.pose.position.x + tank.pose.turret_forward.x * FIRING_ORIGIN_FORWARD_OFFSET,
+                y: tank.pose.position.y + FIRING_ORIGIN_HEIGHT,
+                z: tank.pose.position.z + tank.pose.turret_forward.z * FIRING_ORIGIN_FORWARD_OFFSET,
+            }
+        );
         assert!((representation.turret_forward.x - tank.pose.turret_forward.x).abs() < 0.000_1);
         assert!((representation.turret_forward.z - tank.pose.turret_forward.z).abs() < 0.000_1);
     }
@@ -217,9 +269,18 @@ mod tests {
         let terrain = BattlefieldTerrain::initial();
         let tank = initial_tanks(&terrain)[0];
         let representation = tank.firing_representation(
-            crate::projectile::ShotParameters::new(tank.firing_origin(), 90.0, 30.0, 1.0)
-                .unwrap()
-                .launch_direction(),
+            crate::projectile::ShotParameters::new(
+                WorldPosition {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                90.0,
+                30.0,
+                1.0,
+            )
+            .unwrap()
+            .launch_direction(),
         );
 
         assert!((representation.direction.x - 30_f32.to_radians().cos()).abs() < 0.000_1);

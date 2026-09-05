@@ -25,7 +25,7 @@ These milestones represent the current intended development path.
 * [x] Produce a visible impact/explosion.
 * [x] Deform terrain at the impact point.
 * [x] Add basic aiming controls: azimuth, elevation, and power.
-* [ ] Implement a minimal turn loop.
+* [x] Implement a minimal turn loop.
 * [ ] Implement the move-or-fire decision.
 * [ ] Reach the first genuinely playable human-vs-human artillery match.
 
@@ -306,6 +306,12 @@ Potential terrain styles:
 * [ ] Low-relief open battlefield.
 * [ ] Experimental alien terrain.
 
+## Large / Curved Battlefields — Later / Experimental
+
+* [ ] Explore battlefield scales suitable for larger local multiplayer matches.
+* [ ] Investigate curved or planetary battlefield geometry and the coordinate conventions it needs.
+* [ ] Evaluate projectile readability, horizon visibility, and camera behaviour on curved worlds.
+
 ---
 
 # 9. Terrain Deformation
@@ -425,10 +431,10 @@ Azimuth should remain fundamentally turn-based.
 
 ## Basic Turn Flow
 
-* [ ] Establish player order.
-* [ ] Start player turn.
-* [ ] Permit one primary turn action.
-* [ ] Resolve action fully.
+* [x] Establish player order.
+* [x] Start player turn.
+* [x] Permit one primary turn action.
+* [x] Resolve action fully.
 * [ ] Advance to next surviving player.
 * [ ] Detect end-of-match state.
 
@@ -438,7 +444,7 @@ The intended core tactical choice is:
 
 **move OR fire**
 
-* [ ] Implement fire as a primary turn action.
+* [x] Implement fire as a primary turn action.
 * [ ] Implement movement as a primary turn action.
 * [ ] Prevent normal movement and firing during the same turn.
 * [ ] Allow the design to revisit this rule if playtesting shows a better alternative.
@@ -446,11 +452,11 @@ The intended core tactical choice is:
 
 ## Turn Resolution
 
-* [ ] Complete projectile flight before turn advancement.
-* [ ] Complete terrain deformation before turn advancement.
+* [x] Complete projectile flight before turn advancement.
+* [x] Complete terrain deformation before turn advancement.
 * [ ] Complete damage resolution before turn advancement.
 * [ ] Complete resulting tank displacement/destruction before turn advancement.
-* [ ] Provide a clear transition to the next player.
+* [x] Provide a clear transition to the next player.
 
 ---
 
@@ -689,12 +695,12 @@ Do not add game modes until the core artillery loop is strong.
 
 Local multiplayer should be the simplest path to the first complete game.
 
-* [ ] Support multiple local players.
-* [ ] Clearly identify current player.
-* [ ] Maintain independent player state.
+* [x] Support multiple local players.
+* [x] Clearly identify current player.
+* [x] Maintain independent player state.
 * [ ] Maintain weapon inventories independently.
-* [ ] Support multiple players on one machine.
-* [ ] Ensure hidden information is not required for the basic game.
+* [x] Support multiple players on one machine.
+* [x] Ensure hidden information is not required for the basic game.
 
 Potential later options:
 
@@ -781,7 +787,7 @@ Watching the shot is part of the game.
 
 ## Aiming HUD
 
-* [ ] Current player.
+* [x] Current player.
 * [ ] Weapon.
 * [x] Azimuth.
 * [x] Elevation.
@@ -796,7 +802,7 @@ Watching the shot is part of the game.
 
 * [ ] Remaining players.
 * [ ] Turn order.
-* [ ] Current turn/action state.
+* [x] Current turn/action state.
 * [ ] Environmental summary.
 * [ ] Weapon inventory.
 

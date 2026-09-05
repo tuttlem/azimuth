@@ -32,9 +32,10 @@ close to the visible surface.
 
 An impact ends flight in that simulation step and records only a terrain-impact position. The
 projectile has no bounce, penetration, or damage behaviour. That same authoritative impact
-immediately applies a permanent gameplay crater to the current battlefield. A shot that leaves the
-useful simulation volume without an in-bounds terrain crossing instead ends without an impact
-result or crater.
+immediately applies a permanent gameplay crater to the current battlefield before the firing turn
+can hand control to the other player. A shot that leaves the useful simulation volume without an
+in-bounds terrain crossing instead ends without an impact result or crater and still completes the
+firing turn.
 
 ## Terrain Deformation
 
@@ -62,17 +63,19 @@ to boom even when it lands at the same world position.
 
 ## Player Aiming and Fire
 
-Player One owns persistent gameplay aiming state: azimuth, elevation, and launch velocity. Q/E
-decrease/increase azimuth by 1 degree, R/F increase/decrease elevation by 1 degree, and T/G
-increase/decrease launch velocity by 0.5 abstract units per second. Holding Shift makes those
-changes 5 degrees or 2.5 units per second. Azimuth wraps from 0 through less than 360 degrees;
-elevation clamps to 5–85 degrees; launch velocity clamps to 8–30 units per second.
+Player One begins, then Player One and Player Two alternate persistent gameplay aiming states:
+azimuth, elevation, and launch velocity. Q/E decrease/increase azimuth by 1 degree, R/F
+increase/decrease elevation by 1 degree, and T/G increase/decrease launch velocity by 0.5 abstract
+units per second. Holding Shift makes those changes 5 degrees or 2.5 units per second. Azimuth
+wraps from 0 through less than 360 degrees; elevation clamps to 5–85 degrees; launch velocity
+clamps to 8–30 units per second.
 
-Press Space to fire the current state from Player One's current barrel-end firing origin. The
-existing shot-parameter conversion is the only azimuth/elevation/velocity-to-launch-vector
+Press Space to fire the current player's state from that player's current barrel-end firing origin.
+The existing shot-parameter conversion is the only azimuth/elevation/velocity-to-launch-vector
 calculation. The HUD and placeholder barrel derive from the same state. While the one projectile
-is in flight, all aiming and fire input is ignored. When terrain impact or normal non-impact
-termination ends flight, the same selected settings remain available for bracketing a later shot.
+is resolving, all aiming and fire input is ignored. Terrain impact applies its authoritative crater
+before control changes; normal non-impact termination also changes control without an impact. Each
+player's selected settings remain available when their next turn begins, enabling bracketing.
 
 The default gravity magnitude is 8 abstract units per second squared. It is explicit rather than
 an Earth declaration; launch velocity is a direct, player-visible power value for this first model.

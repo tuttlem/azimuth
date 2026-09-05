@@ -9,12 +9,13 @@ fidelity. Ridiculous weapons and strange battlefields are welcome when they make
 
 ## Status
 
-First playable aiming loop. Azimuth renders two distinct, terrain-grounded tank placeholders on a
-bounded non-flat battlefield. Player One can adjust azimuth, elevation, and power, see the tank's
-barrel respond, fire one deterministic projectile, observe its marker/boom/crater result, adjust,
-and fire again into the changed surface. The boom remains presentation only: crater radius and
-depth are separate gameplay values. Azimuth still has no damage, tank settling, movement, turns,
-audio content, or networking.
+Minimal alternating artillery loop. Azimuth renders two distinct, terrain-grounded tank
+placeholders on a bounded non-flat battlefield. Player One and Player Two take deterministic turns:
+the current player adjusts azimuth, elevation, and power, fires one projectile from that tank's
+barrel, observes its marker/boom/crater result, then hands control to the other player after the
+shot resolves. Each player retains their own aiming values for bracketing later shots. The boom
+remains presentation only: crater radius and depth are separate gameplay values. Azimuth still has
+no damage, tank settling, movement, victory, audio content, or networking.
 
 ## Prerequisites
 
@@ -68,16 +69,18 @@ The current camera is a development inspection tool, not the final gameplay came
 - Hold the right mouse button and drag to orbit the battlefield.
 - Scroll the mouse wheel to move closer to or farther from it.
 - Use WASD or arrow keys to pan across the battlefield.
-- Player One (the red tank) is the active tank. Use Q/E to decrease/increase azimuth, R/F to
-  increase/decrease elevation, and T/G to increase/decrease power. Hold Shift for coarse changes.
-  Azimuth wraps through 0–359 degrees; elevation is limited to 5–85 degrees; power is launch
-  velocity limited to 8–30 abstract units per second. The corner display shows the current values.
-- Press Space to fire Player One's current aim. A projectile starts at the visible barrel-end
-  marker, uses the displayed azimuth/elevation/power, and remains the only active projectile.
-  While it is in flight, aiming and fire input are locked; after it resolves, settings remain for
-  correction and another shot. A small orange marker shows the latest terrain impact, a bright
-  temporary boom expands from that same authoritative position, and the battlefield permanently
-  deforms there while tanks retain their original positions.
+- Player One (red) begins, then turns alternate with Player Two (blue). The corner display names
+  the authoritative current player and whether their shot is ready or resolving. Use Q/E to
+  decrease/increase that player's azimuth, R/F to increase/decrease elevation, and T/G to
+  increase/decrease power. Hold Shift for coarse changes. Azimuth wraps through 0–359 degrees;
+  elevation is limited to 5–85 degrees; power is launch velocity limited to 8–30 abstract units
+  per second. Each player retains their own settings across the other player's turn.
+- Press Space to fire the current player's aim from that tank's visible barrel-end marker. A
+  projectile remains the only active shot while it resolves; aiming and fire input are locked.
+  Terrain impact applies its crater before the other player becomes ready. A shot that leaves the
+  useful simulation volume or expires without an impact still hands off normally without an
+  invented marker, boom, or crater. The temporary boom is presentation-only and may overlap the
+  next ready turn; tanks retain their original positions.
 
 World-space and shot-angle conventions are documented in
 [docs/world-conventions.md](docs/world-conventions.md). The fixed-step ballistic model and its
