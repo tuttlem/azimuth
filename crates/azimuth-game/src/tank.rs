@@ -1,8 +1,15 @@
 use crate::battlefield::{BattlefieldTerrain, is_within_bounds};
-use crate::world::WorldPosition;
+use crate::world::{WorldPosition, WorldVector};
 
 const FIRING_ORIGIN_FORWARD_OFFSET: f32 = 2.1;
 const FIRING_ORIGIN_HEIGHT: f32 = 1.0;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TankFiringRepresentation {
+    pub direction: WorldVector,
+    pub turret_forward: HorizontalDirection,
+    pub muzzle_position: WorldPosition,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlayerId {
@@ -79,6 +86,22 @@ impl Tank {
             x: self.pose.position.x + self.pose.turret_forward.x * FIRING_ORIGIN_FORWARD_OFFSET,
             y: self.pose.position.y + FIRING_ORIGIN_HEIGHT,
             z: self.pose.position.z + self.pose.turret_forward.z * FIRING_ORIGIN_FORWARD_OFFSET,
+        }
+    }
+
+    pub fn firing_representation(self, direction: WorldVector) -> TankFiringRepresentation {
+        let turret_forward = HorizontalDirection::new(direction.x, direction.z);
+        let barrel_pivot = WorldPosition {
+            x: self.pose.position.x,
+            y: self.pose.position.y + FIRING_ORIGIN_HEIGHT,
+            z: self.pose.position.z,
+        };
+
+        TankFiringRepresentation {
+            direction,
+            turret_forward,
+            muzzle_position: barrel_pivot
+                .translated(direction.scaled(FIRING_ORIGIN_FORWARD_OFFSET)),
         }
     }
 }
@@ -166,6 +189,54 @@ mod tests {
         assert_ne!(
             tanks[0].pose.position.y,
             changed_terrain.height(-12.0, -8.0)
+        );
+    }
+
+    #[test]
+    fn level_firing_representation_matches_existing_firing_origin() {
+        let terrain = BattlefieldTerrain::initial();
+        let tank = initial_tanks(&terrain)[0];
+        let azimuth = crate::projectile::azimuth_from_horizontal_direction(
+            tank.pose.turret_forward.x,
+            tank.pose.turret_forward.z,
+        )
+        .unwrap();
+        let representation = tank.firing_representation(
+            crate::projectile::ShotParameters::new(tank.firing_origin(), azimuth, 0.0, 1.0)
+                .unwrap()
+                .launch_direction(),
+        );
+
+        assert_eq!(representation.muzzle_position, tank.firing_origin());
+        assert!((representation.turret_forward.x - tank.pose.turret_forward.x).abs() < 0.000_1);
+        assert!((representation.turret_forward.z - tank.pose.turret_forward.z).abs() < 0.000_1);
+    }
+
+    #[test]
+    fn elevated_firing_representation_moves_muzzle_with_barrel() {
+        let terrain = BattlefieldTerrain::initial();
+        let tank = initial_tanks(&terrain)[0];
+        let representation = tank.firing_representation(
+            crate::projectile::ShotParameters::new(tank.firing_origin(), 90.0, 30.0, 1.0)
+                .unwrap()
+                .launch_direction(),
+        );
+
+        assert!((representation.direction.x - 30_f32.to_radians().cos()).abs() < 0.000_1);
+        assert!(
+            (representation.muzzle_position.x
+                - (tank.pose.position.x
+                    + FIRING_ORIGIN_FORWARD_OFFSET * 30_f32.to_radians().cos()))
+            .abs()
+                < 0.000_1
+        );
+        assert!(
+            (representation.muzzle_position.y
+                - (tank.pose.position.y
+                    + FIRING_ORIGIN_HEIGHT
+                    + FIRING_ORIGIN_FORWARD_OFFSET * 30_f32.to_radians().sin()))
+            .abs()
+                < 0.000_1
         );
     }
 }

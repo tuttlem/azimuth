@@ -1,3 +1,4 @@
+mod aiming;
 mod battlefield;
 mod projectile;
 mod tank;
@@ -5,6 +6,7 @@ mod world;
 
 use std::f32::consts::FRAC_PI_2;
 
+use aiming::{AimAdjustment, AimingState};
 use battlefield::{BattlefieldTerrain, Crater, HALF_EXTENT, terrain_mesh_indices};
 use bevy::{
     asset::RenderAssetUsages,
@@ -14,10 +16,10 @@ use bevy::{
     render::render_resource::PrimitiveTopology,
 };
 use projectile::{
-    Gravity, Projectile, ProjectileAdvance, ShotParameters, SimulationLimits, TerrainImpact,
+    Gravity, Projectile, ProjectileAdvance, SimulationLimits, TerrainImpact,
     azimuth_from_horizontal_direction,
 };
-use tank::{HorizontalDirection, PlayerId, Tank, initial_tanks};
+use tank::{HorizontalDirection, PlayerId, Tank, TankFiringRepresentation, initial_tanks};
 use world::WorldPosition;
 
 const CAMERA_MIN_DISTANCE: f32 = 8.0;
@@ -27,9 +29,6 @@ const CAMERA_ORBIT_SENSITIVITY: f32 = 0.005;
 const CAMERA_ZOOM_SPEED: f32 = 2.0;
 const CAMERA_PITCH_LIMIT: f32 = FRAC_PI_2 - 0.1;
 const PROJECTILE_FIXED_HZ: f64 = 120.0;
-const DEVELOPMENT_ELEVATION_DEGREES: f32 = 45.0;
-const DEVELOPMENT_LAUNCH_SPEED: f32 = 18.0;
-const DEVELOPMENT_IMPACT_LAUNCH_SPEED: f32 = 14.0;
 const DEVELOPMENT_GRAVITY: f32 = 8.0;
 const EXPLOSION_VISUAL_DURATION_SECONDS: f32 = 0.6;
 const EXPLOSION_INITIAL_SCALE: f32 = 0.35;
@@ -45,6 +44,9 @@ struct BattlefieldCamera {
 
 #[derive(Resource)]
 struct InitialTanks([Tank; 2]);
+
+#[derive(Resource)]
+struct ActiveAiming(AimingState);
 
 #[derive(Resource)]
 struct BattlefieldState(BattlefieldTerrain);
@@ -95,6 +97,49 @@ struct ExplosionVisual {
     elapsed_seconds: f32,
 }
 
+#[derive(Component)]
+struct ActiveTankTurret;
+
+#[derive(Component)]
+struct ActiveTankBarrel;
+
+#[derive(Component)]
+struct ActiveTankMuzzle;
+
+#[derive(Component)]
+struct AimingHud;
+
+type ActiveTankTurretTransform<'w, 's> = Single<
+    'w,
+    's,
+    &'static mut Transform,
+    (
+        With<ActiveTankTurret>,
+        Without<ActiveTankBarrel>,
+        Without<ActiveTankMuzzle>,
+    ),
+>;
+type ActiveTankBarrelTransform<'w, 's> = Single<
+    'w,
+    's,
+    &'static mut Transform,
+    (
+        With<ActiveTankBarrel>,
+        Without<ActiveTankTurret>,
+        Without<ActiveTankMuzzle>,
+    ),
+>;
+type ActiveTankMuzzleTransform<'w, 's> = Single<
+    'w,
+    's,
+    &'static mut Transform,
+    (
+        With<ActiveTankMuzzle>,
+        Without<ActiveTankTurret>,
+        Without<ActiveTankBarrel>,
+    ),
+>;
+
 impl Default for BattlefieldCamera {
     fn default() -> Self {
         Self {
@@ -109,9 +154,16 @@ impl Default for BattlefieldCamera {
 fn main() {
     let terrain = BattlefieldTerrain::initial();
     let tanks = initial_tanks(&terrain);
+    let player_one = tanks[0];
+    let initial_azimuth = azimuth_from_horizontal_direction(
+        player_one.pose.turret_forward.x,
+        player_one.pose.turret_forward.z,
+    )
+    .expect("initial Player One turret direction must be valid");
     App::new()
         .add_plugins(DefaultPlugins)
         .insert_resource(InitialTanks(tanks))
+        .insert_resource(ActiveAiming(AimingState::new(initial_azimuth, 45.0, 18.0)))
         .insert_resource(BattlefieldState(terrain))
         .insert_resource(ProjectileFlight::default())
         .insert_resource(LatestTerrainImpact::default())
@@ -125,14 +177,18 @@ fn main() {
             Update,
             (
                 update_battlefield_camera,
-                launch_development_projectile,
+                update_aiming_input,
+                sync_active_tank_aim,
+                launch_aimed_projectile,
+                sync_aiming_hud,
                 sync_projectile_visual,
                 sync_impact_marker,
                 sync_terrain_impact_explosion,
                 update_explosion_visuals,
                 sync_battlefield_mesh,
                 draw_world_axes,
-            ),
+            )
+                .chain(),
         )
         .add_systems(FixedUpdate, advance_projectile)
         .run();
@@ -143,6 +199,7 @@ fn spawn_battlefield_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     tanks: Res<InitialTanks>,
+    aiming: Res<ActiveAiming>,
     terrain: Res<BattlefieldState>,
 ) {
     let camera = BattlefieldCamera::default();
@@ -185,8 +242,29 @@ fn spawn_battlefield_scene(
             &tank_meshes,
             material,
             firing_origin_material.clone(),
+            if tank.owner == PlayerId::One {
+                Some(active_firing_representation(tank, aiming.0))
+            } else {
+                None
+            },
         );
     }
+
+    commands.spawn((
+        AimingHud,
+        Text::new(format_aiming_hud(aiming.0, false)),
+        TextFont {
+            font_size: 22.0,
+            ..default()
+        },
+        TextColor(Color::WHITE),
+        Node {
+            position_type: PositionType::Absolute,
+            top: px(16),
+            left: px(16),
+            ..default()
+        },
+    ));
 
     commands.insert_resource(ProjectileVisualAssets {
         mesh: meshes.add(Sphere::new(0.28)),
@@ -206,41 +284,25 @@ fn spawn_battlefield_scene(
     });
 }
 
-fn launch_development_projectile(
+fn launch_aimed_projectile(
     keyboard: Res<ButtonInput<KeyCode>>,
     tanks: Res<InitialTanks>,
+    aiming: Res<ActiveAiming>,
     assets: Res<ProjectileVisualAssets>,
     mut flight: ResMut<ProjectileFlight>,
     mut latest_impact: ResMut<LatestTerrainImpact>,
     mut commands: Commands,
 ) {
-    let launch_speed = if keyboard.just_pressed(KeyCode::Space) {
-        DEVELOPMENT_LAUNCH_SPEED
-    } else if keyboard.just_pressed(KeyCode::KeyI) {
-        DEVELOPMENT_IMPACT_LAUNCH_SPEED
-    } else {
-        return;
-    };
-
-    if flight.0.is_some() {
+    if !keyboard.just_pressed(KeyCode::Space) || !can_accept_aiming_input(flight.0.is_some()) {
         return;
     }
 
     let tank = tanks.0[0];
-    let azimuth =
-        azimuth_from_horizontal_direction(tank.pose.turret_forward.x, tank.pose.turret_forward.z)
-            .expect("initial tank turret direction must be valid");
-    let parameters = ShotParameters::new(
-        tank.firing_origin(),
-        azimuth,
-        DEVELOPMENT_ELEVATION_DEGREES,
-        launch_speed,
-    )
-    .expect("development shot parameters must be valid");
+    let parameters = launch_parameters_for_aim(tank, aiming.0);
     let projectile = Projectile::launch(parameters);
 
     commands.spawn((
-        Name::new("Development projectile"),
+        Name::new("Aimed projectile"),
         ProjectileVisual,
         Mesh3d(assets.mesh.clone()),
         MeshMaterial3d(assets.material.clone()),
@@ -248,6 +310,130 @@ fn launch_development_projectile(
     ));
     flight.0 = Some(projectile);
     latest_impact.0 = None;
+}
+
+fn update_aiming_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    flight: Res<ProjectileFlight>,
+    mut aiming: ResMut<ActiveAiming>,
+) {
+    if !can_accept_aiming_input(flight.0.is_some()) {
+        return;
+    }
+
+    let coarse = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    for adjustment in aiming_adjustments(&keyboard) {
+        aiming.0.apply(adjustment, coarse);
+    }
+}
+
+fn aiming_adjustments(keyboard: &ButtonInput<KeyCode>) -> Vec<AimAdjustment> {
+    [
+        key_pair_adjustment(
+            keyboard,
+            KeyCode::KeyQ,
+            KeyCode::KeyE,
+            AimAdjustment::AzimuthDecrease,
+            AimAdjustment::AzimuthIncrease,
+        ),
+        key_pair_adjustment(
+            keyboard,
+            KeyCode::KeyF,
+            KeyCode::KeyR,
+            AimAdjustment::ElevationDecrease,
+            AimAdjustment::ElevationIncrease,
+        ),
+        key_pair_adjustment(
+            keyboard,
+            KeyCode::KeyG,
+            KeyCode::KeyT,
+            AimAdjustment::PowerDecrease,
+            AimAdjustment::PowerIncrease,
+        ),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+fn key_pair_adjustment(
+    keyboard: &ButtonInput<KeyCode>,
+    decrease: KeyCode,
+    increase: KeyCode,
+    decrease_adjustment: AimAdjustment,
+    increase_adjustment: AimAdjustment,
+) -> Option<AimAdjustment> {
+    match (
+        keyboard.just_pressed(decrease),
+        keyboard.just_pressed(increase),
+    ) {
+        (true, false) => Some(decrease_adjustment),
+        (false, true) => Some(increase_adjustment),
+        _ => None,
+    }
+}
+
+fn active_firing_representation(tank: Tank, aiming: AimingState) -> TankFiringRepresentation {
+    let direction = projectile::ShotParameters::direction_for_angles(
+        aiming.azimuth_degrees,
+        aiming.elevation_degrees,
+    )
+    .expect("validated aiming state must have a valid canonical direction");
+    tank.firing_representation(direction)
+}
+
+fn launch_parameters_for_aim(tank: Tank, aiming: AimingState) -> projectile::ShotParameters {
+    let firing = active_firing_representation(tank, aiming);
+    aiming.shot_parameters(firing.muzzle_position)
+}
+
+fn can_accept_aiming_input(projectile_active: bool) -> bool {
+    !projectile_active
+}
+
+fn sync_active_tank_aim(
+    tanks: Res<InitialTanks>,
+    aiming: Res<ActiveAiming>,
+    mut turret: ActiveTankTurretTransform,
+    mut barrel: ActiveTankBarrelTransform,
+    mut muzzle: ActiveTankMuzzleTransform,
+) {
+    let tank = tanks.0[0];
+    let firing = active_firing_representation(tank, aiming.0);
+    **turret =
+        direction_transform(firing.turret_forward).with_translation(Vec3::new(0.0, 1.0, 0.0));
+
+    let pitch = Quat::from_rotation_x(aiming.0.elevation_degrees.to_radians());
+    **barrel = Transform {
+        translation: pitch * Vec3::NEG_Z * 1.35,
+        rotation: pitch,
+        ..default()
+    };
+    **muzzle = Transform::from_translation(Vec3::new(
+        firing.muzzle_position.x - tank.pose.position.x,
+        firing.muzzle_position.y - tank.pose.position.y,
+        firing.muzzle_position.z - tank.pose.position.z,
+    ));
+}
+
+fn sync_aiming_hud(
+    aiming: Res<ActiveAiming>,
+    flight: Res<ProjectileFlight>,
+    mut hud: Single<&mut Text, With<AimingHud>>,
+) {
+    hud.0 = format_aiming_hud(aiming.0, flight.0.is_some());
+}
+
+fn format_aiming_hud(aiming: AimingState, projectile_active: bool) -> String {
+    let status = if projectile_active {
+        "PROJECTILE IN FLIGHT — aiming locked"
+    } else {
+        "READY — Q/E azimuth, R/F elevation, T/G power, Shift coarse, Space fire"
+    };
+    format!(
+        "Player One\nAzimuth: {:.0}°\nElevation: {:.0}°\nPower: {:.1} units/s\n{status}",
+        aiming.azimuth_degrees, aiming.elevation_degrees, aiming.launch_speed
+    )
 }
 
 fn advance_projectile(
@@ -413,9 +599,11 @@ fn spawn_tank(
     meshes: &TankMeshes,
     material: Handle<StandardMaterial>,
     firing_origin_material: Handle<StandardMaterial>,
+    active_firing: Option<TankFiringRepresentation>,
 ) {
     let position = tank.pose.position;
-    let firing_origin = tank.firing_origin();
+    let firing_origin =
+        active_firing.map_or_else(|| tank.firing_origin(), |firing| firing.muzzle_position);
     let player_name = match tank.owner {
         PlayerId::One => "Player one tank",
         PlayerId::Two => "Player two tank",
@@ -435,24 +623,27 @@ fn spawn_tank(
                     .with_translation(Vec3::new(0.0, 0.4, 0.0)),
             ));
 
-            tank_parent
-                .spawn((
-                    Mesh3d(meshes.turret.clone()),
+            let mut turret_entity = tank_parent.spawn((
+                Mesh3d(meshes.turret.clone()),
+                MeshMaterial3d(material.clone()),
+                direction_transform(tank.pose.turret_forward)
+                    .with_translation(Vec3::new(0.0, 1.0, 0.0)),
+            ));
+            if tank.owner == PlayerId::One {
+                turret_entity.insert(ActiveTankTurret);
+            }
+            turret_entity.with_children(|turret| {
+                let mut barrel_entity = turret.spawn((
+                    Mesh3d(meshes.barrel.clone()),
                     MeshMaterial3d(material.clone()),
-                    direction_transform(tank.pose.turret_forward)
-                        .with_translation(Vec3::new(0.0, 1.0, 0.0)),
-                ))
-                .with_children(|turret| {
-                    turret.spawn((
-                        Mesh3d(meshes.barrel.clone()),
-                        MeshMaterial3d(material.clone()),
-                        Transform::from_xyz(0.0, 0.0, -1.35),
-                    ));
-                });
+                    Transform::from_xyz(0.0, 0.0, -1.35),
+                ));
+                if tank.owner == PlayerId::One {
+                    barrel_entity.insert(ActiveTankBarrel);
+                }
+            });
 
-            // This marks the derived handoff point for the next projectile feature. It is not a
-            // projectile and does not add firing behaviour to this scene.
-            tank_parent.spawn((
+            let mut muzzle_entity = tank_parent.spawn((
                 Name::new("Firing origin"),
                 Mesh3d(meshes.firing_origin_marker.clone()),
                 MeshMaterial3d(firing_origin_material.clone()),
@@ -462,6 +653,9 @@ fn spawn_tank(
                     firing_origin.z - position.z,
                 ),
             ));
+            if tank.owner == PlayerId::One {
+                muzzle_entity.insert(ActiveTankMuzzle);
+            }
         });
 }
 
@@ -622,5 +816,52 @@ mod tests {
             clamp_camera_target(Vec3::new(30.0, 0.0, -30.0)),
             Vec3::new(HALF_EXTENT, 0.0, -HALF_EXTENT)
         );
+    }
+
+    #[test]
+    fn aiming_keys_select_expected_adjustments_and_opposites_cancel() {
+        let mut keyboard = ButtonInput::default();
+        keyboard.press(KeyCode::KeyQ);
+        keyboard.press(KeyCode::KeyR);
+        keyboard.press(KeyCode::KeyT);
+        assert_eq!(
+            aiming_adjustments(&keyboard),
+            vec![
+                AimAdjustment::AzimuthDecrease,
+                AimAdjustment::ElevationIncrease,
+                AimAdjustment::PowerIncrease,
+            ]
+        );
+
+        keyboard = ButtonInput::default();
+        keyboard.press(KeyCode::KeyQ);
+        keyboard.press(KeyCode::KeyE);
+        assert!(aiming_adjustments(&keyboard).is_empty());
+    }
+
+    #[test]
+    fn current_aim_controls_initial_projectile_conditions() {
+        let terrain = BattlefieldTerrain::initial();
+        let tank = initial_tanks(&terrain)[0];
+        let baseline = AimingState::new(90.0, 30.0, 12.0);
+        let same = launch_parameters_for_aim(tank, baseline);
+        let changed_azimuth = launch_parameters_for_aim(tank, AimingState::new(100.0, 30.0, 12.0));
+        let raised = launch_parameters_for_aim(tank, AimingState::new(90.0, 40.0, 12.0));
+        let stronger = launch_parameters_for_aim(tank, AimingState::new(90.0, 30.0, 18.0));
+
+        assert_eq!(same, launch_parameters_for_aim(tank, baseline));
+        assert_ne!(
+            same.launch_direction().x,
+            changed_azimuth.launch_direction().x
+        );
+        assert!(raised.launch_velocity().y > same.launch_velocity().y);
+        assert!(stronger.launch_velocity().x.abs() > same.launch_velocity().x.abs());
+        assert_eq!(same.launch_speed, 12.0);
+    }
+
+    #[test]
+    fn active_projectile_locks_and_resolution_reenables_aiming() {
+        assert!(!can_accept_aiming_input(true));
+        assert!(can_accept_aiming_input(false));
     }
 }

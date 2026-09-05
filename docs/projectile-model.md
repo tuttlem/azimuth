@@ -60,20 +60,22 @@ exact simulation-resolved point after the boom disappears. A local presentation 
 current result once, resets when a new launch clears the result, and therefore permits a later shot
 to boom even when it lands at the same world position.
 
-## Development Shot
+## Player Aiming and Fire
 
-Press Space to fire one development shot from Player One's firing origin. It uses the tank's turret
-azimuth, 45 degrees of elevation, a launch speed of 18 abstract units per second, and a default
-gravity magnitude of 8 abstract units per second squared. A second Space press while that shot is
-in flight is ignored.
+Player One owns persistent gameplay aiming state: azimuth, elevation, and launch velocity. Q/E
+decrease/increase azimuth by 1 degree, R/F increase/decrease elevation by 1 degree, and T/G
+increase/decrease launch velocity by 0.5 abstract units per second. Holding Shift makes those
+changes 5 degrees or 2.5 units per second. Azimuth wraps from 0 through less than 360 degrees;
+elevation clamps to 5–85 degrees; launch velocity clamps to 8–30 units per second.
 
-Press I to fire a separate fixed inspection shot with the same origin and elevation but a launch
-speed of 14 abstract units per second. It lands within the current bounded terrain and exists only
-to make terrain impact and its marker easy to inspect; it is not an aiming control.
+Press Space to fire the current state from Player One's current barrel-end firing origin. The
+existing shot-parameter conversion is the only azimuth/elevation/velocity-to-launch-vector
+calculation. The HUD and placeholder barrel derive from the same state. While the one projectile
+is in flight, all aiming and fire input is ignored. When terrain impact or normal non-impact
+termination ends flight, the same selected settings remain available for bracketing a later shot.
 
-The gravity value is explicit and may be changed during development to compare trajectories; it is
-not a declaration that Azimuth uses Earth gravity. The launch speed is likewise a development value,
-not a final player-facing power scale.
+The default gravity magnitude is 8 abstract units per second squared. It is explicit rather than
+an Earth declaration; launch velocity is a direct, player-visible power value for this first model.
 
 ## Intentional Boundary
 

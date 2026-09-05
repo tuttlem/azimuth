@@ -9,14 +9,12 @@ fidelity. Ridiculous weapons and strange battlefields are welcome when they make
 
 ## Status
 
-First impact-feedback loop. Azimuth renders two distinct, terrain-grounded tank placeholders on a
-bounded non-flat battlefield and can fire one visible deterministic development projectile through
-a configurable gravity field. A projectile stops at the visible terrain surface, leaves a simple
-development impact marker, triggers a brief expanding visual boom, and permanently lowers the
-authoritative battlefield at the simulation-resolved impact position. Later shots use the changed
-surface. The boom itself remains presentation only: crater radius and depth are separate gameplay
-values. Azimuth still has no damage, tank settling, aiming UI, movement, turns, audio content, or
-networking.
+First playable aiming loop. Azimuth renders two distinct, terrain-grounded tank placeholders on a
+bounded non-flat battlefield. Player One can adjust azimuth, elevation, and power, see the tank's
+barrel respond, fire one deterministic projectile, observe its marker/boom/crater result, adjust,
+and fire again into the changed surface. The boom remains presentation only: crater radius and
+depth are separate gameplay values. Azimuth still has no damage, tank settling, movement, turns,
+audio content, or networking.
 
 ## Prerequisites
 
@@ -70,14 +68,16 @@ The current camera is a development inspection tool, not the final gameplay came
 - Hold the right mouse button and drag to orbit the battlefield.
 - Scroll the mouse wheel to move closer to or farther from it.
 - Use WASD or arrow keys to pan across the battlefield.
-- Press Space to fire one fixed development shot from Player One. Further presses are ignored until
-  that projectile impacts terrain or leaves its simulation volume. A small orange marker shows the
-  latest terrain-impact position and clears when the next shot launches. A bright temporary boom
-  expands from that same authoritative position; its disappearance does not remove the marker.
-  The battlefield permanently deforms there, while tanks intentionally remain at their original
-  positions until terrain/tank reconciliation is implemented.
-- Press I to fire a shorter fixed development impact shot. It is an inspection aid that lands
-  within the current battlefield; it is not an aiming control.
+- Player One (the red tank) is the active tank. Use Q/E to decrease/increase azimuth, R/F to
+  increase/decrease elevation, and T/G to increase/decrease power. Hold Shift for coarse changes.
+  Azimuth wraps through 0–359 degrees; elevation is limited to 5–85 degrees; power is launch
+  velocity limited to 8–30 abstract units per second. The corner display shows the current values.
+- Press Space to fire Player One's current aim. A projectile starts at the visible barrel-end
+  marker, uses the displayed azimuth/elevation/power, and remains the only active projectile.
+  While it is in flight, aiming and fire input are locked; after it resolves, settings remain for
+  correction and another shot. A small orange marker shows the latest terrain impact, a bright
+  temporary boom expands from that same authoritative position, and the battlefield permanently
+  deforms there while tanks retain their original positions.
 
 World-space and shot-angle conventions are documented in
 [docs/world-conventions.md](docs/world-conventions.md). The fixed-step ballistic model and its

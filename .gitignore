@@ -4,6 +4,10 @@
 # Editor and IDE metadata
 .idea/
 .vscode/
+*.rs.bk
+*.log
+.env*
+*.swp
 
 # Platform artifacts
 .DS_Store

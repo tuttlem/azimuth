@@ -24,7 +24,7 @@ These milestones represent the current intended development path.
 * [x] Detect projectile impact with the battlefield.
 * [x] Produce a visible impact/explosion.
 * [x] Deform terrain at the impact point.
-* [ ] Add basic aiming controls: azimuth, elevation, and power.
+* [x] Add basic aiming controls: azimuth, elevation, and power.
 * [ ] Implement a minimal turn loop.
 * [ ] Implement the move-or-fire decision.
 * [ ] Reach the first genuinely playable human-vs-human artillery match.
@@ -387,20 +387,20 @@ Aiming is the player's primary interaction with the physics system.
 
 ## Core Controls
 
-* [ ] Adjust azimuth.
-* [ ] Adjust elevation.
-* [ ] Adjust firing power / launch velocity.
+* [x] Adjust azimuth.
+* [x] Adjust elevation.
+* [x] Adjust firing power / launch velocity.
 * [ ] Select weapon.
-* [ ] Fire.
-* [ ] Clearly present current aiming values.
-* [ ] Provide sufficiently fine aiming control.
-* [ ] Provide sufficiently fast coarse adjustment.
+* [x] Fire.
+* [x] Clearly present current aiming values.
+* [x] Provide sufficiently fine aiming control.
+* [x] Provide sufficiently fast coarse adjustment.
 
 ## Aiming Feedback
 
-* [ ] Display azimuth.
-* [ ] Display elevation.
-* [ ] Display power.
+* [x] Display azimuth.
+* [x] Display elevation.
+* [x] Display power.
 * [ ] Display selected weapon.
 * [ ] Display relevant wind information.
 * [ ] Display gravity/environment information.
@@ -411,9 +411,9 @@ Aiming is the player's primary interaction with the physics system.
 
 ## Player Skill
 
-* [ ] Preserve the ability to bracket shots.
-* [ ] Reward learning previous shot results.
-* [ ] Make changes in power/elevation produce understandable effects.
+* [x] Preserve the ability to bracket shots.
+* [x] Reward learning previous shot results.
+* [x] Make changes in power/elevation produce understandable effects.
 * [ ] Make movement capable of disrupting established firing solutions.
 * [ ] Keep aiming satisfying without requiring external calculation.
 
@@ -783,9 +783,9 @@ Watching the shot is part of the game.
 
 * [ ] Current player.
 * [ ] Weapon.
-* [ ] Azimuth.
-* [ ] Elevation.
-* [ ] Power.
+* [x] Azimuth.
+* [x] Elevation.
+* [x] Power.
 * [ ] Wind.
 * [ ] Gravity.
 * [ ] Atmospheric information where relevant.
@@ -802,11 +802,11 @@ Watching the shot is part of the game.
 
 ## Usability
 
-* [ ] Keyboard controls.
+* [x] Keyboard controls.
 * [ ] Mouse controls where appropriate.
 * [ ] Controller evaluation later.
-* [ ] Clear input feedback.
-* [ ] Readable values.
+* [x] Clear input feedback.
+* [x] Readable values.
 * [ ] Scalable UI.
 * [ ] Avoid clutter.
 * [ ] Preserve focus on battlefield action.

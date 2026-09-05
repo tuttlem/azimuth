@@ -50,6 +50,23 @@ impl ShotParameters {
         }
     }
 
+    pub fn direction_for_angles(
+        azimuth_degrees: f32,
+        elevation_degrees: f32,
+    ) -> Result<WorldVector, ProjectileParameterError> {
+        Self::new(
+            WorldPosition {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            azimuth_degrees,
+            elevation_degrees,
+            1.0,
+        )
+        .map(Self::launch_direction)
+    }
+
     pub fn launch_velocity(self) -> WorldVector {
         self.launch_direction().scaled(self.launch_speed)
     }
@@ -277,6 +294,26 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn reusable_direction_uses_the_same_angle_convention_as_shot_parameters() {
+        let parameters = ShotParameters::new(
+            WorldPosition {
+                x: 2.0,
+                y: 3.0,
+                z: 4.0,
+            },
+            450.0,
+            30.0,
+            12.0,
+        )
+        .unwrap();
+
+        assert_eq!(
+            ShotParameters::direction_for_angles(450.0, 30.0).unwrap(),
+            parameters.launch_direction()
+        );
     }
 
     #[test]

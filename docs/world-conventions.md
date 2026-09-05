@@ -30,9 +30,10 @@ They describe Azimuth's game world rather than a rendering API's coordinate nami
 
 ## Projectile Handoff and Lifetime
 
-- A projectile begins exactly at its tank's derived firing origin: the point ahead of and above the
-  tank body at the placeholder barrel end. The firing-origin marker is a visual reference for that
-  same domain point.
+- A projectile begins exactly at its active tank's derived firing origin: the placeholder barrel
+  pivot is one unit above the tank base and its barrel end is 2.1 units along the canonical full
+  shot direction. The firing-origin marker is a visual reference for that same domain point, so
+  elevation moves the marker upward and shortens its horizontal advance with the visible barrel.
 - The first projectile simulation has a generous useful volume: X and Z must remain within 60
   units of the origin, Y must remain from -30 through 100, and flight lasts at most 20 simulated
   seconds.
