@@ -16,9 +16,11 @@ one-unit cardinal steps over current terrain, including craters; steep terrain a
 edges block a step without spending allowance. Each player retains their own aiming values, so a
 move changes the firing origin and world-space solution without erasing prior knowledge. The boom
 remains presentation only. Terrain impacts deal distance-based splash damage: both tanks begin at
-100 health, blasts reach 6 world units, and a centre hit deals up to 40 damage. A tank at zero
-health is eliminated; the final survivor wins and mutual elimination draws. Azimuth still has no
-tank settling after later terrain changes, audio content, or networking.
+100 health, blasts reach 6 world units, and a centre hit deals up to 40 damage. A crater that
+removes a living tank's support makes it visibly settle under the configured gravity before the
+turn can advance; it changes the next firing origin without resetting aim and causes no fall
+damage. A tank at zero health is eliminated; the final survivor wins and mutual elimination draws.
+Azimuth still has no audio content or networking.
 
 ## Prerequisites
 
@@ -91,11 +93,11 @@ The camera presents the current turn and fired shots without owning gameplay tim
 - Press Space to choose firing and launch the current player's aim from that tank's visible
   barrel-end marker. Moving and firing are mutually exclusive for a turn. A projectile remains the
   only active shot while it resolves; action, aiming, and movement input are locked.
-  Terrain impact applies its crater before the other player becomes ready. A shot that leaves the
-  useful simulation volume or expires without an impact still hands off normally without an
-  invented marker, boom, or crater. The temporary boom is presentation-only and may overlap the
-  next choosing turn. Tanks deliberately do not settle when a later impact removes terrain below
-  them; a tank is grounded whenever the player deliberately moves it.
+  Terrain impact applies its crater and settles every affected living tank before the other player
+  becomes ready. A shot that leaves the useful simulation volume or expires without an impact still
+  hands off normally without an invented marker, boom, or crater. The temporary boom is
+  presentation-only and may overlap the next choosing turn. A tank that falls into a crater keeps
+  its aim values but fires later from its settled barrel origin; settling causes no fall damage.
 
 World-space and shot-angle conventions are documented in
 [docs/world-conventions.md](docs/world-conventions.md). The fixed-step ballistic model and its

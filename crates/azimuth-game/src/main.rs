@@ -249,7 +249,10 @@ fn main() {
             )
                 .chain(),
         )
-        .add_systems(FixedUpdate, advance_projectile)
+        .add_systems(
+            FixedUpdate,
+            (advance_projectile, advance_tank_settling).chain(),
+        )
         .run();
 }
 
@@ -731,19 +734,60 @@ fn resolve_projectile_advance(
             resolve_explosion(tanks, impact.position);
             terrain.apply_crater(impact.position, Crater::default_development());
             *latest_impact = Some(impact);
-            assert!(
-                turn.complete_resolution_after_damage(survivors(tanks)),
-                "only a resolving shot may terminate"
-            );
+            reconcile_living_tank_support(tanks, terrain);
+            complete_resolution_if_settled(tanks, turn);
             None
         }
         ProjectileAdvance::OutOfBounds => {
             assert!(
-                turn.complete_resolution_after_damage(survivors(tanks)),
+                turn.complete_fire_resolution(survivors(tanks)),
                 "only a resolving shot may terminate"
             );
             None
         }
+    }
+}
+
+/// Authoritative settling is intentionally fixed-step and follows projectile advancement. A
+/// camera transition or boom lifetime can observe this state but cannot make it progress.
+fn advance_tank_settling(
+    gravity: Res<BattlefieldGravity>,
+    terrain: Res<BattlefieldState>,
+    mut tanks: ResMut<Tanks>,
+    mut turn: ResMut<CurrentTurn>,
+) {
+    if turn.0.phase != TurnPhase::ResolvingFire || !any_living_tank_is_settling(&tanks.0) {
+        return;
+    }
+
+    for tank in &mut tanks.0 {
+        if !tank.is_eliminated() {
+            tank.advance_settling(&terrain.0, gravity.0);
+        }
+    }
+    complete_resolution_if_settled(&tanks.0, &mut turn.0);
+}
+
+fn reconcile_living_tank_support(tanks: &mut [Tank; 2], terrain: &BattlefieldTerrain) {
+    for tank in tanks {
+        if !tank.is_eliminated() {
+            tank.reconcile_support(terrain);
+        }
+    }
+}
+
+fn any_living_tank_is_settling(tanks: &[Tank; 2]) -> bool {
+    tanks
+        .iter()
+        .any(|tank| !tank.is_eliminated() && tank.is_settling())
+}
+
+fn complete_resolution_if_settled(tanks: &[Tank; 2], turn: &mut TurnState) {
+    if !any_living_tank_is_settling(tanks) {
+        assert!(
+            turn.complete_fire_resolution(survivors(tanks)),
+            "only a resolving shot may terminate"
+        );
     }
 }
 
@@ -1368,7 +1412,7 @@ mod tests {
         assert!(turn.accept_movement_step());
         assert!(turn.finish_movement());
         assert!(turn.begin_fire().is_some());
-        assert!(turn.complete_resolution_after_damage([true, true]));
+        assert!(turn.complete_fire_resolution([true, true]));
 
         assert_eq!(turn.current_aim(), retained_aim);
         let after = launch_parameters_for_aim(tanks[0], turn.current_aim());
@@ -1446,6 +1490,122 @@ mod tests {
     }
 
     #[test]
+    fn crater_beneath_a_living_tank_defers_handoff_until_it_settles() {
+        let mut terrain = BattlefieldTerrain::initial();
+        let mut tanks = initial_tanks(&terrain);
+        let mut impact = None;
+        let mut turn = initial_turn_state(tanks);
+        let projectile = Projectile::launch(AimingState::new(0.0, 45.0, 18.0).shot_parameters(
+            WorldPosition {
+                x: 0.0,
+                y: 5.0,
+                z: 0.0,
+            },
+        ));
+        let centre = tanks[0].pose.position;
+
+        assert!(turn.begin_fire().is_some());
+        assert!(
+            resolve_projectile_advance(
+                projectile,
+                ProjectileAdvance::TerrainImpact(TerrainImpact { position: centre }),
+                &mut terrain,
+                &mut tanks,
+                &mut impact,
+                &mut turn,
+            )
+            .is_none()
+        );
+        assert_eq!(tanks[0].health, 60);
+        assert!(tanks[0].is_settling());
+        assert_eq!(turn.phase, TurnPhase::ResolvingFire);
+        assert_eq!(turn.current_player, PlayerId::One);
+        assert!(!turn.begin_movement());
+        assert!(turn.begin_fire().is_none());
+
+        for _ in 0..200 {
+            if !any_living_tank_is_settling(&tanks) {
+                break;
+            }
+            for tank in &mut tanks {
+                if !tank.is_eliminated() {
+                    tank.advance_settling(&terrain, Gravity::new(DEVELOPMENT_GRAVITY).unwrap());
+                }
+            }
+            complete_resolution_if_settled(&tanks, &mut turn);
+        }
+        assert!(!tanks[0].is_settling());
+        assert_eq!(turn.current_player, PlayerId::Two);
+        assert_eq!(turn.phase, TurnPhase::Choosing);
+        assert!(!turn.complete_fire_resolution(survivors(&tanks)));
+    }
+
+    #[test]
+    fn zero_gravity_settling_keeps_the_resolving_turn_locked() {
+        let mut terrain = BattlefieldTerrain::initial();
+        let mut tanks = initial_tanks(&terrain);
+        let mut impact = None;
+        let mut turn = initial_turn_state(tanks);
+        let projectile = Projectile::launch(AimingState::new(0.0, 45.0, 18.0).shot_parameters(
+            WorldPosition {
+                x: 0.0,
+                y: 5.0,
+                z: 0.0,
+            },
+        ));
+        let centre = tanks[0].pose.position;
+
+        assert!(turn.begin_fire().is_some());
+        resolve_projectile_advance(
+            projectile,
+            ProjectileAdvance::TerrainImpact(TerrainImpact { position: centre }),
+            &mut terrain,
+            &mut tanks,
+            &mut impact,
+            &mut turn,
+        );
+        let before = tanks[0];
+        for tank in &mut tanks {
+            if !tank.is_eliminated() {
+                tank.advance_settling(&terrain, Gravity::new(0.0).unwrap());
+            }
+        }
+        complete_resolution_if_settled(&tanks, &mut turn);
+
+        assert_eq!(tanks[0], before);
+        assert!(tanks[0].is_settling());
+        assert_eq!(turn.phase, TurnPhase::ResolvingFire);
+        assert_eq!(turn.current_player, PlayerId::One);
+    }
+
+    #[test]
+    fn settled_pose_preserves_aim_and_changes_the_later_firing_origin() {
+        let mut terrain = BattlefieldTerrain::initial();
+        let mut tanks = initial_tanks(&terrain);
+        let turn = initial_turn_state(tanks);
+        let retained_aim = turn.current_aim();
+        let before = launch_parameters_for_aim(tanks[0], retained_aim);
+
+        terrain.apply_crater(tanks[0].pose.position, Crater::default_development());
+        reconcile_living_tank_support(&mut tanks, &terrain);
+        for _ in 0..200 {
+            tanks[0].advance_settling(&terrain, Gravity::new(DEVELOPMENT_GRAVITY).unwrap());
+        }
+        let after = launch_parameters_for_aim(tanks[0], retained_aim);
+
+        assert!(!tanks[0].is_settling());
+        assert_eq!(turn.current_aim(), retained_aim);
+        assert_eq!(after.azimuth_degrees, before.azimuth_degrees);
+        assert_eq!(after.elevation_degrees, before.elevation_degrees);
+        assert_eq!(after.launch_speed, before.launch_speed);
+        assert_ne!(after.launch_position, before.launch_position);
+        assert_eq!(
+            tanks[0].pose.position.y,
+            terrain.height(tanks[0].pose.position.x, tanks[0].pose.position.z)
+        );
+    }
+
+    #[test]
     fn out_of_bounds_resolution_advances_once_without_impact_or_terrain_change() {
         let mut terrain = BattlefieldTerrain::initial();
         let mut tanks = initial_tanks(&terrain);
@@ -1479,6 +1639,6 @@ mod tests {
         assert_eq!(terrain.height(0.0, 0.0), before);
         assert_eq!(turn.current_player, PlayerId::Two);
         assert_eq!(turn.phase, TurnPhase::Choosing);
-        assert!(!turn.complete_resolution_after_damage([true, true]));
+        assert!(!turn.complete_fire_resolution([true, true]));
     }
 }

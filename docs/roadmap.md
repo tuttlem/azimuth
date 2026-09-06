@@ -329,7 +329,7 @@ Explosions should change the tactical battlefield, not merely create visual effe
 * [x] Parameterise crater depth.
 * [x] Ensure terrain deformation remains stable.
 * [x] Update collision geometry after deformation.
-* [ ] Update tank positioning where terrain changes underneath them.
+* [x] Update tank positioning where terrain changes underneath them.
 * [x] Ensure subsequent projectiles interact with deformed terrain.
 
 ## Tactical Effects
@@ -368,6 +368,10 @@ Tanks should initially be simple game pieces rather than realistic vehicles.
 * [x] Associate player identity with a tank.
 
 ## Damage / Survival
+
+Tank support settling deliberately adds no fall or terrain-related damage. Falling into a crater
+already changes position and firing origin; revisit damage only if future duels show that it needs
+its own readable gameplay consequence.
 
 * [x] Establish basic health/damage rules.
 * [x] Apply explosion damage based on useful gameplay rules.
@@ -458,7 +462,7 @@ The intended core tactical choice is:
 * [x] Complete projectile flight before turn advancement.
 * [x] Complete terrain deformation before turn advancement.
 * [x] Complete damage resolution before turn advancement.
-* [ ] Complete resulting tank displacement/destruction before turn advancement.
+* [x] Complete resulting tank displacement/destruction before turn advancement.
 * [x] Provide a clear transition to the next player.
 
 ---

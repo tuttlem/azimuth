@@ -31,11 +31,11 @@ fast projectile from tunnelling through the terrain and produces a deterministic
 close to the visible surface.
 
 An impact ends flight in that simulation step and records a terrain-impact position. The
-projectile has no bounce, penetration, or damage behaviour. That same authoritative impact
-immediately applies one distance-based duel blast and a permanent gameplay crater before the firing
-turn can hand control to the other player. A shot that leaves the useful simulation volume without an
-in-bounds terrain crossing instead ends without an impact result or crater and still completes the
-firing turn.
+projectile has no bounce or penetration behaviour. That same authoritative impact applies one
+distance-based duel blast, creates a permanent gameplay crater, then resolves any living tanks
+whose terrain support changed before the firing turn can hand control to the other player. A shot
+that leaves the useful simulation volume without an in-bounds terrain crossing instead ends without
+an impact result or crater and still completes the firing turn.
 
 ## Terrain Deformation
 
@@ -46,8 +46,12 @@ Each impact lowers current grid vertices inside the default crater radius using
 edge. Overlapping impacts subtract from the already-deformed terrain, and edge craters are clipped
 to valid grid vertices.
 
-Crater radius and depth are explicit gameplay parameters, independent of the visual boom. Tanks
-remain at their startup poses when terrain changes in this feature.
+Crater radius and depth are explicit gameplay parameters, independent of the visual boom. A living
+tank compares its base point with this same current surface after deformation. If the surface was
+lowered by more than the documented support tolerance, it falls vertically under the existing
+fixed-step gravity until terrain contact; it cannot pass through the current surface. This changes
+the next firing origin but not retained aim values, and adds no fall damage, sliding, or wreck
+physics.
 
 ## Impact Presentation
 
@@ -73,9 +77,10 @@ clamps to 8–30 units per second.
 Press Space to fire the current player's state from that player's current barrel-end firing origin.
 The existing shot-parameter conversion is the only azimuth/elevation/velocity-to-launch-vector
 calculation. The HUD and placeholder barrel derive from the same state. While the one projectile
-is resolving, all aiming and fire input is ignored. Terrain impact applies its authoritative crater
-before control changes; normal non-impact termination also changes control without an impact. Each
-player's selected settings remain available when their next turn begins, enabling bracketing.
+or resulting tank settling is resolving, all aiming and fire input is ignored. Terrain impact
+applies its authoritative crater and completes living-tank settling before control changes; normal
+non-impact termination also changes control without an impact. Each player's selected settings
+remain available when their next turn begins, enabling bracketing.
 
 The default gravity magnitude is 8 abstract units per second squared. It is explicit rather than
 an Earth declaration; launch velocity is a direct, player-visible power value for this first model.

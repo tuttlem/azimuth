@@ -88,6 +88,10 @@ impl Gravity {
         })
     }
 
+    pub fn downward_acceleration(self) -> f32 {
+        self.downward_acceleration
+    }
+
     fn acceleration(self) -> WorldVector {
         WorldVector {
             y: -self.downward_acceleration,
@@ -257,6 +261,11 @@ mod tests {
     use super::*;
 
     const EPSILON: f32 = 0.000_1;
+
+    #[test]
+    fn gravity_exposes_its_validated_downward_acceleration() {
+        assert_eq!(Gravity::new(8.0).unwrap().downward_acceleration(), 8.0);
+    }
 
     fn assert_close(actual: f32, expected: f32) {
         assert!(

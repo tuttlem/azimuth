@@ -112,7 +112,9 @@ impl TurnState {
         Some((self.current_player, self.current_aim()))
     }
 
-    pub fn complete_resolution_after_damage(&mut self, survivors: [bool; 2]) -> bool {
+    /// Completes a firing turn only after every authoritative consequence, including terrain
+    /// response, has settled. Presentation systems never call or gate this transition.
+    pub fn complete_fire_resolution(&mut self, survivors: [bool; 2]) -> bool {
         if self.phase != TurnPhase::ResolvingFire {
             return false;
         }
@@ -175,7 +177,7 @@ mod tests {
         let fired = state.begin_fire();
         assert_eq!(fired, Some((PlayerId::One, state.aim_for(PlayerId::One))));
         assert_eq!(state.phase, TurnPhase::ResolvingFire);
-        assert!(state.complete_resolution_after_damage([true, true]));
+        assert!(state.complete_fire_resolution([true, true]));
         assert_eq!(state.current_player, PlayerId::Two);
         assert_eq!(state.phase, TurnPhase::Choosing);
     }
@@ -216,7 +218,7 @@ mod tests {
         let player_two = state.current_aim();
         state.apply_current_aim(AimAdjustment::PowerDecrease, false);
         state.begin_fire();
-        state.complete_resolution_after_damage([true, true]);
+        state.complete_fire_resolution([true, true]);
 
         assert_eq!(state.current_player, PlayerId::One);
         assert_eq!(state.current_aim(), changed_player_one);
@@ -253,7 +255,7 @@ mod tests {
                     state.apply_current_aim(AimAdjustment::AzimuthIncrease, false);
                     state.begin_fire();
                     trace.push((state.current_player, state.phase, state.current_aim()));
-                    state.complete_resolution_after_damage([true, true]);
+                    state.complete_fire_resolution([true, true]);
                 }
                 trace.push((state.current_player, state.phase, state.current_aim()));
             }
@@ -266,7 +268,7 @@ mod tests {
     fn lethal_resolution_finishes_match_and_rejects_actions() {
         let mut state = state();
         state.begin_fire();
-        assert!(state.complete_resolution_after_damage([true, false]));
+        assert!(state.complete_fire_resolution([true, false]));
         assert_eq!(state.match_state, MatchState::Winner(PlayerId::One));
         assert_eq!(state.phase, TurnPhase::Finished);
         assert!(!state.begin_movement());
@@ -278,7 +280,7 @@ mod tests {
     fn simultaneous_elimination_is_a_draw() {
         let mut state = state();
         state.begin_fire();
-        assert!(state.complete_resolution_after_damage([false, false]));
+        assert!(state.complete_fire_resolution([false, false]));
         assert_eq!(state.match_state, MatchState::Draw);
         assert_eq!(state.phase, TurnPhase::Finished);
     }

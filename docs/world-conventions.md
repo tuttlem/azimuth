@@ -39,8 +39,8 @@ They describe Azimuth's game world rather than a rendering API's coordinate nami
   seconds.
 - The visible battlefield terrain is bounded from -20 to +20 on X and Z. It is a mutable 20-by-20
   grid of rendered triangles whose current piecewise planar surface is authoritative for local
-  terrain height, initial tank placement, and projectile intersection. Impacts permanently lower
-  that surface; tanks do not yet settle onto later terrain changes.
+  terrain height, tank support, and projectile intersection. Impacts permanently lower that
+  surface; affected living tanks then settle using that same current surface.
 - A projectile that travels from above to on or below that in-bounds terrain surface during a fixed
   step impacts it. The impact point is refined deterministically along that travelled segment and
   ends flight; a lightweight development marker displays the result.
@@ -64,8 +64,26 @@ development defaults.
 - The tank body faces its most recent accepted movement direction. Turret azimuth, elevation, and
   power remain retained player values, so a later shot begins at the new tank position without
   automatic aim compensation.
-- Terrain deformation is the sole source of movement height and passability. Tanks intentionally
-  do not settle after later impacts below a stationary pose; that remains separate work.
+- Terrain deformation is the sole source of movement height and passability. A later impact may
+  also lower a stationary living tank's support and thereby change the position from which its
+  next movement or shot begins.
+
+## Tank Support and Settling
+
+- A living tank uses the terrain height directly below its authoritative base point as its first
+  support model. If the base is within 0.05 world units of that height, it snaps to the surface and
+  remains supported; a terrain rise likewise prevents embedding.
+- If deformation lowers that support by more than 0.05 units, the tank falls vertically under the
+  configured battlefield gravity on the same fixed 1/120-second cadence as projectile simulation.
+  Each step queries current terrain and clamps contact exactly to it. Falling preserves X/Z and
+  horizontal body/turret directions; there is no sliding, tilt, suspension, or wreck physics.
+- A terrain impact resolves in this order: one existing damage evaluation, terrain deformation,
+  support evaluation and any living-tank settling, then survivor/match evaluation and turn handoff.
+  The firing turn stays resolving throughout settling; boom and camera timing never gates it.
+- Settling does not cause fall damage. Eliminated tanks do not settle. Stored azimuth, elevation,
+  and power remain intact, but the settled base changes a future barrel origin and firing solution.
+- With a zero-gravity battlefield, a newly unsupported tank remains unresolved/floating and keeps
+  the firing turn locked. A player-facing zero-gravity resolution policy remains future work.
 
 ## Tactical Controls and Presentation
 
@@ -88,5 +106,5 @@ development defaults.
   inside the radius; the edge and exterior deal zero damage. Both tanks start at 100 health, and
   the firing tank is not immune.
 - Damage for both tanks is calculated from the same impact before either health changes. Zero health
-  eliminates a tank. One survivor wins; no survivors draw. Damage, crater, survivor selection, and
-  match result settle before any turn handoff or presentation timing.
+  eliminates a tank. One survivor wins; no survivors draw. Damage, crater, living-tank settling,
+  survivor selection, and match result settle before any turn handoff or presentation timing.

@@ -1,4 +1,5 @@
 use crate::battlefield::{BattlefieldTerrain, is_within_bounds};
+use crate::projectile::{FIXED_STEP_SECONDS, Gravity};
 use crate::world::{WorldPosition, WorldVector};
 
 const FIRING_ORIGIN_FORWARD_OFFSET: f32 = 2.1;
@@ -7,6 +8,15 @@ pub const MOVEMENT_STEP_DISTANCE: f32 = 1.0;
 pub const MOVEMENT_ALLOWANCE: u8 = 6;
 pub const MAX_MOVEMENT_ELEVATION_CHANGE: f32 = 0.75;
 pub const MAX_HEALTH: u8 = 100;
+pub const SUPPORT_TOLERANCE: f32 = 0.05;
+
+/// A tank is either resting on the current authoritative terrain or descends vertically until it
+/// reaches it. This intentionally models tactical support rather than vehicle physics.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TankSupport {
+    Supported,
+    Falling { downward_velocity: f32 },
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TankFiringRepresentation {
@@ -96,6 +106,7 @@ pub struct Tank {
     pub owner: PlayerId,
     pub pose: TankPose,
     pub health: u8,
+    pub support: TankSupport,
 }
 
 impl Tank {
@@ -123,6 +134,7 @@ impl Tank {
                 turret_forward,
             },
             health: MAX_HEALTH,
+            support: TankSupport::Supported,
         }
     }
 
@@ -132,6 +144,55 @@ impl Tank {
 
     pub fn apply_damage(&mut self, damage: u8) {
         self.health = self.health.saturating_sub(damage);
+    }
+
+    pub fn is_settling(self) -> bool {
+        matches!(self.support, TankSupport::Falling { .. })
+    }
+
+    /// Re-evaluates the base-point support after terrain changes. The tank's X/Z and directions
+    /// are deliberately preserved: craters alter the terrain, and gravity supplies only vertical
+    /// response in this first model.
+    pub fn reconcile_support(&mut self, terrain: &BattlefieldTerrain) {
+        if self.is_eliminated() {
+            return;
+        }
+
+        let ground = terrain.height(self.pose.position.x, self.pose.position.z);
+        if self.pose.position.y - ground <= SUPPORT_TOLERANCE {
+            self.pose.position.y = ground;
+            self.support = TankSupport::Supported;
+        } else if !self.is_settling() {
+            self.support = TankSupport::Falling {
+                downward_velocity: 0.0,
+            };
+        }
+    }
+
+    /// Advances one authoritative fixed settling step. Querying the current surface on every
+    /// step keeps contact correct even if later terrain changes arrive before the tank lands.
+    pub fn advance_settling(&mut self, terrain: &BattlefieldTerrain, gravity: Gravity) {
+        if self.is_eliminated() {
+            return;
+        }
+        let TankSupport::Falling { downward_velocity } = self.support else {
+            return;
+        };
+
+        let acceleration = gravity.downward_acceleration();
+        let candidate_y = self.pose.position.y
+            - downward_velocity * FIXED_STEP_SECONDS
+            - 0.5 * acceleration * FIXED_STEP_SECONDS * FIXED_STEP_SECONDS;
+        let ground = terrain.height(self.pose.position.x, self.pose.position.z);
+        if candidate_y <= ground {
+            self.pose.position.y = ground;
+            self.support = TankSupport::Supported;
+        } else {
+            self.pose.position.y = candidate_y;
+            self.support = TankSupport::Falling {
+                downward_velocity: downward_velocity + acceleration * FIXED_STEP_SECONDS,
+            };
+        }
     }
 
     #[cfg(test)]
@@ -189,6 +250,7 @@ impl Tank {
             z: destination_z,
         };
         moved.pose.body_forward = direction.horizontal_direction();
+        moved.support = TankSupport::Supported;
         Ok(moved)
     }
 }
@@ -218,6 +280,19 @@ pub fn initial_tanks(terrain: &BattlefieldTerrain) -> [Tank; 2] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn crater_beneath(tank: Tank) -> BattlefieldTerrain {
+        let mut terrain = BattlefieldTerrain::initial();
+        terrain.apply_crater(
+            WorldPosition {
+                x: tank.pose.position.x,
+                y: 0.0,
+                z: tank.pose.position.z,
+            },
+            crate::battlefield::Crater::default_development(),
+        );
+        terrain
+    }
 
     #[test]
     fn initial_tanks_have_distinct_in_bounds_terrain_resolved_spawns() {
@@ -285,23 +360,157 @@ mod tests {
     }
 
     #[test]
-    fn existing_tanks_do_not_move_when_terrain_changes_after_startup() {
+    fn support_reconciliation_only_reacts_to_terrain_beneath_the_base() {
         let terrain = BattlefieldTerrain::initial();
-        let tanks = initial_tanks(&terrain);
-        let mut changed_terrain = terrain.clone();
-        changed_terrain.apply_crater(
+        let mut tank = initial_tanks(&terrain)[0];
+        let before_pose = tank.pose;
+        let mut remote_terrain = terrain.clone();
+        remote_terrain.apply_crater(
             WorldPosition {
-                x: -12.0,
+                x: 12.0,
                 y: 0.0,
-                z: -8.0,
+                z: 8.0,
             },
             crate::battlefield::Crater::default_development(),
         );
+        tank.reconcile_support(&remote_terrain);
+        assert_eq!(tank.pose, before_pose);
+        assert!(!tank.is_settling());
 
-        assert_eq!(tanks[0].pose.position.y, terrain.height(-12.0, -8.0));
-        assert_ne!(
-            tanks[0].pose.position.y,
-            changed_terrain.height(-12.0, -8.0)
+        let changed_terrain = crater_beneath(tank);
+        tank.reconcile_support(&changed_terrain);
+        assert!(tank.is_settling());
+        assert_eq!(tank.pose.position.x, before_pose.position.x);
+        assert_eq!(tank.pose.position.z, before_pose.position.z);
+        assert_eq!(tank.pose.body_forward, before_pose.body_forward);
+        assert_eq!(tank.pose.turret_forward, before_pose.turret_forward);
+    }
+
+    #[test]
+    fn support_tolerance_and_terrain_rise_snap_a_tank_to_current_height() {
+        let terrain = BattlefieldTerrain::initial();
+        let mut tank = initial_tanks(&terrain)[0];
+        let height = terrain.height(tank.pose.position.x, tank.pose.position.z);
+
+        tank.pose.position.y = height + SUPPORT_TOLERANCE;
+        tank.reconcile_support(&terrain);
+        assert_eq!(tank.pose.position.y, height);
+        assert!(!tank.is_settling());
+
+        tank.pose.position.y = height - 1.0;
+        tank.reconcile_support(&terrain);
+        assert_eq!(tank.pose.position.y, height);
+        assert!(!tank.is_settling());
+    }
+
+    #[test]
+    fn settling_uses_gravity_and_clamps_to_the_current_terrain() {
+        let terrain = BattlefieldTerrain::initial();
+        let mut tank = initial_tanks(&terrain)[0];
+        let changed_terrain = crater_beneath(tank);
+        let starting_height = tank.pose.position.y;
+        tank.reconcile_support(&changed_terrain);
+
+        tank.advance_settling(
+            &changed_terrain,
+            crate::projectile::Gravity::new(8.0).unwrap(),
+        );
+        assert_eq!(
+            tank.pose.position.y,
+            starting_height
+                - 0.5
+                    * 8.0
+                    * crate::projectile::FIXED_STEP_SECONDS
+                    * crate::projectile::FIXED_STEP_SECONDS
+        );
+        assert!(tank.is_settling());
+
+        for _ in 0..200 {
+            tank.advance_settling(
+                &changed_terrain,
+                crate::projectile::Gravity::new(8.0).unwrap(),
+            );
+        }
+        assert!(!tank.is_settling());
+        assert_eq!(
+            tank.pose.position.y,
+            changed_terrain.height(tank.pose.position.x, tank.pose.position.z)
+        );
+    }
+
+    #[test]
+    fn settling_is_deterministic_and_zero_gravity_remains_unresolved() {
+        let terrain = BattlefieldTerrain::initial();
+        let mut first = initial_tanks(&terrain)[0];
+        let mut second = first;
+        let changed_terrain = crater_beneath(first);
+        first.reconcile_support(&changed_terrain);
+        second.reconcile_support(&changed_terrain);
+        for _ in 0..12 {
+            first.advance_settling(
+                &changed_terrain,
+                crate::projectile::Gravity::new(8.0).unwrap(),
+            );
+            second.advance_settling(
+                &changed_terrain,
+                crate::projectile::Gravity::new(8.0).unwrap(),
+            );
+        }
+        assert_eq!(first, second);
+
+        let mut zero_gravity = initial_tanks(&terrain)[0];
+        zero_gravity.reconcile_support(&changed_terrain);
+        let before = zero_gravity;
+        zero_gravity.advance_settling(
+            &changed_terrain,
+            crate::projectile::Gravity::new(0.0).unwrap(),
+        );
+        assert_eq!(zero_gravity, before);
+        assert!(zero_gravity.is_settling());
+    }
+
+    #[test]
+    fn a_settled_tank_starts_later_movement_from_its_final_pose() {
+        let terrain = BattlefieldTerrain::initial();
+        let mut tank = initial_tanks(&terrain)[0];
+        let changed_terrain = crater_beneath(tank);
+        tank.reconcile_support(&changed_terrain);
+        for _ in 0..200 {
+            tank.advance_settling(
+                &changed_terrain,
+                crate::projectile::Gravity::new(8.0).unwrap(),
+            );
+        }
+        let settled = tank.pose.position;
+
+        let moved = tank
+            .step_on_terrain(&changed_terrain, MovementDirection::PositiveX)
+            .unwrap();
+        assert_eq!(moved.pose.position.x, settled.x + MOVEMENT_STEP_DISTANCE);
+        assert_eq!(moved.pose.position.z, settled.z);
+        assert_eq!(
+            moved.pose.position.y,
+            changed_terrain.height(moved.pose.position.x, moved.pose.position.z)
+        );
+    }
+
+    #[test]
+    fn eliminated_tanks_do_not_enter_or_advance_settling() {
+        let terrain = BattlefieldTerrain::initial();
+        let mut tank = initial_tanks(&terrain)[0];
+        let changed_terrain = crater_beneath(tank);
+        tank.apply_damage(MAX_HEALTH);
+        tank.reconcile_support(&changed_terrain);
+        tank.advance_settling(
+            &changed_terrain,
+            crate::projectile::Gravity::new(8.0).unwrap(),
+        );
+
+        assert!(tank.is_eliminated());
+        assert!(!tank.is_settling());
+        assert_eq!(
+            tank.pose.position.y,
+            terrain.height(tank.pose.position.x, tank.pose.position.z)
         );
     }
 
