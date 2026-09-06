@@ -80,17 +80,19 @@ The camera presents the current turn and fired shots without owning gameplay tim
   At each choosing turn, the camera smoothly presents that player's tank behind their barrel's
   horizontal aim direction; firing pulls it back to a wider battlefield view. These transitions
   never delay input, flight, impact, or handoff.
-  While choosing, Left/Right decrease/increase azimuth, Up/Down increase/decrease elevation, and
+  While choosing, Left/Right decrease/increase azimuth, Up/Down decrease/increase elevation, and
   `-`/`=` decrease/increase power. A press changes one fine increment immediately; holding a key
   begins repeat after 300 ms and repeats every 100 ms. Hold Shift for coarse changes. Azimuth
   wraps through 0–359 degrees; elevation is limited to 5–85 degrees; power is launch velocity
   limited to 8–30 abstract units per second. Each player retains their own settings across the
   other player's turn. WASD and the arrows do not pan the camera.
-- The HUD reports a barrel-relative wind direction such as `right` or `ahead`, plus the signed
-  authoritative X/Z vector and strength. It changes with the active player's aim, not the camera.
-  A graphical wind indicator is deferred until the HUD receives its planned graphical frame.
-- Press M to choose movement. I/J/K/L request one step toward negative Z/negative X/positive
-  Z/positive X. A movement action starts with six steps; a valid step must stay within the
+- The graphical tactical HUD keeps wind strength beside an ASCII-safe world-axis plot: `+X` is
+  right and `+Z` is up. Its marker points toward the direction the wind pushes a projectile. It is
+  intentionally world-relative rather than camera-relative.
+- Press M to choose movement. The arrow keys request one cardinal step relative to the current
+  camera view: Up moves into the view, Down moves out, and Left/Right move across it. At diagonal
+  camera angles the nearest cardinal world step is selected. A movement action starts with six
+  steps; a valid step must stay within the
   battlefield and change terrain height by no more than 0.75 units. The display shows remaining
   steps and a concise reason when terrain is too steep or a boundary blocks a request. Press Enter
   to end movement early; using the final step also hands control to the other player. Movement
@@ -103,6 +105,14 @@ The camera presents the current turn and fired shots without owning gameplay tim
   hands off normally without an invented marker, boom, or crater. The temporary boom is
   presentation-only and may overlap the next choosing turn. A tank that falls into a crater keeps
   its aim values but fires later from its settled barrel origin; settling causes no fall damage.
+
+## Tactical HUD
+
+The HUD is a compact, read-only corner frame: the upper left shows the active player, current
+action, and both players' colour-coded health bars; the upper right shows exact azimuth,
+elevation, power, wind strength, and the world-axis wind plot. The lower left only shows movement
+allowance and the controls relevant to the current phase. It never delays a projectile, settling,
+turn handoff, or camera transition.
 
 World-space and shot-angle conventions are documented in
 [docs/world-conventions.md](docs/world-conventions.md). The fixed-step ballistic model and its

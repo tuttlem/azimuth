@@ -298,6 +298,27 @@ Terrain should affect both aiming and tactical position.
 * [ ] Avoid terrain configurations that create unwinnable matches.
 * [ ] Support authored terrain eventually if useful.
 
+## Fair Randomized Starts
+
+* [ ] Select two deterministic, seed-reproducible starting positions for each match.
+* [ ] Place tanks only on valid, supported, reasonably traversable terrain.
+* [ ] Require useful minimum separation so a duel does not begin point-blank.
+* [ ] Reject or regenerate starts that have an obviously unfair immediate tactical position.
+* [ ] Resolve initial tank orientation and camera presentation from the selected starts.
+* [ ] Preserve a match seed or equivalent development diagnostic for reproducible reports.
+
+## Battlefield Scale and Features
+
+* [ ] Increase the battlefield beyond the current small development arena while retaining readable
+  camera framing, projectile limits, terrain queries, and deterministic simulation.
+* [ ] Establish a useful playable size range for two-player duels before considering larger matches.
+* [ ] Generate tactical hills, ridges, mountains, bowls, and valleys as part of terrain.
+* [ ] Add simple terrain-integrated placeholder features such as buildings and trees where they
+  improve line-of-fire, cover, or navigation decisions.
+* [ ] Decide which features are authoritative obstacles and which are presentation-only before
+  relying on them for gameplay.
+* [ ] Avoid prematurely adding a general prop, foliage, destruction, or object-physics system.
+
 ## Terrain Styles
 
 Potential terrain styles:
@@ -808,14 +829,14 @@ non-conflicting panning control remain separate work.
 
 ## Graphical Tactical HUD
 
-* [ ] Replace the temporary text-only HUD with a compact graphical tactical frame.
-* [ ] Show the active player's name and current turn/action state.
-* [ ] Show both players' health and elimination state.
-* [ ] Show current azimuth, elevation, and firing power.
-* [ ] Show movement allowance while a movement action is active.
-* [ ] Show wind strength and a graphical world/shot-relative direction indicator.
-* [ ] Keep controls as concise contextual hints rather than the HUD's primary content.
-* [ ] Keep HUD presentation read-only so it cannot delay or alter authoritative gameplay.
+* [x] Replace the temporary text-only HUD with a compact graphical tactical frame.
+* [x] Show the active player's name and current turn/action state.
+* [x] Show both players' health and elimination state.
+* [x] Show current azimuth, elevation, and firing power.
+* [x] Show movement allowance while a movement action is active.
+* [x] Show wind strength and a graphical world/shot-relative direction indicator.
+* [x] Keep controls as concise contextual hints rather than the HUD's primary content.
+* [x] Keep HUD presentation read-only so it cannot delay or alter authoritative gameplay.
 
 ## Aiming HUD
 
@@ -827,7 +848,7 @@ non-conflicting panning control remain separate work.
 * [x] Wind.
 * [ ] Gravity.
 * [ ] Atmospheric information where relevant.
-* [ ] Add a graphical world-axis wind indicator when the HUD gains a graphical frame.
+* [x] Add a graphical world-axis wind indicator when the HUD gains a graphical frame.
 * [x] Health.
 * [x] Movement allowance where relevant.
 

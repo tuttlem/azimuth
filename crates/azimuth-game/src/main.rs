@@ -24,7 +24,7 @@ use projectile::{
     azimuth_from_horizontal_direction,
 };
 use tank::{
-    HorizontalDirection, MovementDirection, MovementRejection, PlayerId, Tank,
+    HorizontalDirection, MAX_HEALTH, MovementDirection, MovementRejection, PlayerId, Tank,
     TankFiringRepresentation, initial_tanks,
 };
 use turn::{MatchState, TurnPhase, TurnState};
@@ -177,7 +177,52 @@ struct TankBarrel(PlayerId);
 struct TankMuzzle(PlayerId);
 
 #[derive(Component)]
-struct AimingHud;
+struct TacticalHud;
+
+#[derive(Component)]
+struct HudText(HudTextField);
+
+#[derive(Component)]
+struct HudHealthFill(PlayerId);
+
+#[derive(Component)]
+struct HudWindMarker;
+
+#[derive(Component)]
+struct HudActivePlayerPanel;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HudTextField {
+    Match,
+    PlayerOneHealth,
+    PlayerTwoHealth,
+    Aim,
+    Wind,
+    Movement,
+    Controls,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum HudAction {
+    Choose,
+    Moving,
+    Resolving,
+    Finished,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct TacticalHudView {
+    active_player: Option<PlayerId>,
+    action: HudAction,
+    player_one_health: u8,
+    player_two_health: u8,
+    player_one_eliminated: bool,
+    player_two_eliminated: bool,
+    aim: Option<AimingState>,
+    wind: Wind,
+    movement: Option<(u8, Option<MovementRejection>)>,
+    result: MatchState,
+}
 
 type TankTurretTransforms<'w, 's> = Query<
     'w,
@@ -190,6 +235,17 @@ type TankBarrelTransforms<'w, 's> = Query<
     's,
     (&'static TankBarrel, &'static mut Transform),
     (Without<TankTurret>, Without<TankMuzzle>),
+>;
+type HudDecorations<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static mut Node,
+        Option<&'static HudWindMarker>,
+        Option<&'static mut BorderColor>,
+        Option<&'static HudActivePlayerPanel>,
+    ),
+    Without<HudHealthFill>,
 >;
 type TankMuzzleTransforms<'w, 's> = Query<
     'w,
@@ -249,7 +305,7 @@ fn main() {
                 sync_tank_elimination,
                 sync_tank_aim,
                 launch_aimed_projectile,
-                sync_aiming_hud,
+                sync_tactical_hud,
                 sync_projectile_visual,
                 sync_impact_marker,
                 sync_terrain_impact_explosion,
@@ -272,7 +328,6 @@ fn spawn_battlefield_scene(
     tanks: Res<Tanks>,
     turn: Res<CurrentTurn>,
     terrain: Res<BattlefieldState>,
-    wind: Res<BattlefieldWind>,
 ) {
     let camera = BattlefieldCamera::default();
     let transform = camera_transform(&camera);
@@ -318,21 +373,7 @@ fn spawn_battlefield_scene(
         );
     }
 
-    commands.spawn((
-        AimingHud,
-        Text::new(format_aiming_hud(turn.0, tanks.0, wind.0, None)),
-        TextFont {
-            font_size: 22.0,
-            ..default()
-        },
-        TextColor(Color::WHITE),
-        Node {
-            position_type: PositionType::Absolute,
-            top: px(16),
-            left: px(16),
-            ..default()
-        },
-    ));
+    spawn_tactical_hud(&mut commands);
 
     commands.insert_resource(ProjectileVisualAssets {
         mesh: meshes.add(Sphere::new(0.28)),
@@ -396,6 +437,7 @@ fn select_movement_action(
 fn update_movement_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     terrain: Res<BattlefieldState>,
+    camera: Single<&BattlefieldCamera>,
     mut tanks: ResMut<Tanks>,
     mut feedback: ResMut<MovementFeedback>,
     mut turn: ResMut<CurrentTurn>,
@@ -409,7 +451,7 @@ fn update_movement_input(
         }
         return;
     }
-    let Some(direction) = movement_direction(&keyboard) else {
+    let Some(direction) = movement_direction(&keyboard, camera.yaw) else {
         return;
     };
     let player = turn.0.current_player;
@@ -427,18 +469,45 @@ fn update_movement_input(
     }
 }
 
-fn movement_direction(keyboard: &ButtonInput<KeyCode>) -> Option<MovementDirection> {
+/// Maps screen-space arrows to the nearest existing cardinal world step. This retains deliberate
+/// one-unit movement while making directions follow the current tactical camera orientation.
+fn movement_direction(
+    keyboard: &ButtonInput<KeyCode>,
+    camera_yaw: f32,
+) -> Option<MovementDirection> {
+    let camera_forward = (-camera_yaw.sin(), -camera_yaw.cos());
+    let camera_right = (camera_yaw.cos(), -camera_yaw.sin());
     let directions = [
-        (KeyCode::KeyI, MovementDirection::NegativeZ),
-        (KeyCode::KeyJ, MovementDirection::NegativeX),
-        (KeyCode::KeyK, MovementDirection::PositiveZ),
-        (KeyCode::KeyL, MovementDirection::PositiveX),
+        (KeyCode::ArrowUp, camera_forward),
+        (KeyCode::ArrowLeft, (-camera_right.0, -camera_right.1)),
+        (KeyCode::ArrowDown, (-camera_forward.0, -camera_forward.1)),
+        (KeyCode::ArrowRight, camera_right),
     ];
     let mut requested = directions
         .into_iter()
         .filter_map(|(key, direction)| keyboard.just_pressed(key).then_some(direction));
-    let direction = requested.next()?;
-    requested.next().is_none().then_some(direction)
+    let horizontal_direction = requested.next()?;
+    requested
+        .next()
+        .is_none()
+        .then_some(nearest_cardinal_movement_direction(
+            horizontal_direction.0,
+            horizontal_direction.1,
+        ))
+}
+
+fn nearest_cardinal_movement_direction(x: f32, z: f32) -> MovementDirection {
+    if x.abs() >= z.abs() {
+        if x >= 0.0 {
+            MovementDirection::PositiveX
+        } else {
+            MovementDirection::NegativeX
+        }
+    } else if z >= 0.0 {
+        MovementDirection::PositiveZ
+    } else {
+        MovementDirection::NegativeZ
+    }
 }
 
 fn update_aiming_input(
@@ -483,8 +552,8 @@ fn aiming_adjustments(
     let adjustments = [
         AimAdjustment::AzimuthDecrease,
         AimAdjustment::AzimuthIncrease,
-        AimAdjustment::ElevationIncrease,
         AimAdjustment::ElevationDecrease,
+        AimAdjustment::ElevationIncrease,
         AimAdjustment::PowerDecrease,
         AimAdjustment::PowerIncrease,
     ];
@@ -632,83 +701,334 @@ fn sync_tank_elimination(tanks: Res<Tanks>, mut visuals: Query<(&TankVisual, &mu
     }
 }
 
-fn sync_aiming_hud(
-    turn: Res<CurrentTurn>,
-    tanks: Res<Tanks>,
-    wind: Res<BattlefieldWind>,
-    feedback: Res<MovementFeedback>,
-    mut hud: Single<&mut Text, With<AimingHud>>,
-) {
-    hud.0 = format_aiming_hud(turn.0, tanks.0, wind.0, feedback.0);
+fn spawn_tactical_hud(commands: &mut Commands) {
+    commands
+        .spawn((
+            TacticalHud,
+            Node {
+                width: percent(100),
+                height: percent(100),
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            Pickable::IGNORE,
+        ))
+        .with_children(|root| {
+            root.spawn((
+                BackgroundColor(Color::srgba(0.03, 0.05, 0.08, 0.82)),
+                BorderColor::all(Color::srgb(0.85, 0.25, 0.18)),
+                HudActivePlayerPanel,
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(16),
+                    left: px(16),
+                    width: px(245),
+                    padding: UiRect::all(px(10)),
+                    border: UiRect::all(px(2)),
+                    row_gap: px(4),
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                },
+            ))
+            .with_children(|p| {
+                hud_text(p, HudTextField::Match, 22.0);
+                hud_text(p, HudTextField::PlayerOneHealth, 16.0);
+                hud_text(p, HudTextField::PlayerTwoHealth, 16.0);
+                health_bar(p, PlayerId::One);
+                health_bar(p, PlayerId::Two);
+            });
+            root.spawn((
+                BackgroundColor(Color::srgba(0.03, 0.05, 0.08, 0.82)),
+                BorderColor::all(Color::srgb(0.9, 0.75, 0.2)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(16),
+                    right: px(16),
+                    width: px(230),
+                    padding: UiRect::all(px(10)),
+                    border: UiRect::all(px(2)),
+                    row_gap: px(4),
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                },
+            ))
+            .with_children(|p| {
+                hud_text(p, HudTextField::Aim, 17.0);
+                hud_text(p, HudTextField::Wind, 16.0);
+                p.spawn((
+                    BackgroundColor(Color::srgba(0.08, 0.12, 0.16, 0.9)),
+                    Node {
+                        width: px(96),
+                        height: px(76),
+                        position_type: PositionType::Relative,
+                        ..default()
+                    },
+                ))
+                .with_children(|plot| {
+                    plot.spawn((
+                        BackgroundColor(Color::srgba(0.7, 0.75, 0.8, 0.6)),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            left: px(8),
+                            right: px(8),
+                            top: px(37),
+                            height: px(1),
+                            ..default()
+                        },
+                    ));
+                    plot.spawn((
+                        BackgroundColor(Color::srgba(0.7, 0.75, 0.8, 0.6)),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            top: px(8),
+                            bottom: px(8),
+                            left: px(47),
+                            width: px(1),
+                            ..default()
+                        },
+                    ));
+                    plot.spawn((
+                        Text::new("+Z      +X"),
+                        TextFont {
+                            font_size: 11.,
+                            ..default()
+                        },
+                        TextColor(Color::WHITE),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            top: px(1),
+                            left: px(48),
+                            ..default()
+                        },
+                    ));
+                    plot.spawn((
+                        HudWindMarker,
+                        BackgroundColor(Color::srgb(0.95, 0.8, 0.2)),
+                        Node {
+                            position_type: PositionType::Absolute,
+                            width: px(8),
+                            height: px(8),
+                            left: px(44),
+                            top: px(33),
+                            ..default()
+                        },
+                    ));
+                });
+            });
+            root.spawn((
+                BackgroundColor(Color::srgba(0.03, 0.05, 0.08, 0.82)),
+                BorderColor::all(Color::srgb(0.4, 0.6, 0.8)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    bottom: px(16),
+                    left: px(16),
+                    width: px(300),
+                    padding: UiRect::all(px(10)),
+                    border: UiRect::all(px(2)),
+                    row_gap: px(3),
+                    flex_direction: FlexDirection::Column,
+                    ..default()
+                },
+            ))
+            .with_children(|p| {
+                hud_text(p, HudTextField::Movement, 17.0);
+                hud_text(p, HudTextField::Controls, 14.0);
+            });
+        });
 }
 
-fn format_aiming_hud(
+fn hud_text(parent: &mut ChildSpawnerCommands, field: HudTextField, size: f32) {
+    parent.spawn((
+        HudText(field),
+        Text::default(),
+        TextFont {
+            font_size: size,
+            ..default()
+        },
+        TextColor(Color::WHITE),
+    ));
+}
+fn health_bar(parent: &mut ChildSpawnerCommands, player: PlayerId) {
+    parent
+        .spawn((
+            BackgroundColor(Color::srgba(0.15, 0.18, 0.22, 0.95)),
+            Node {
+                width: percent(100),
+                height: px(8),
+                ..default()
+            },
+        ))
+        .with_children(|bar| {
+            bar.spawn((
+                HudHealthFill(player),
+                BackgroundColor(player_color(player)),
+                Node {
+                    width: percent(100),
+                    height: percent(100),
+                    ..default()
+                },
+            ));
+        });
+}
+
+fn tactical_hud_view(
     turn: TurnState,
     tanks: [Tank; 2],
     wind: Wind,
     feedback: Option<MovementRejection>,
-) -> String {
-    let health = |player| {
-        let tank = tank_for_player(tanks, player);
-        let state = if tank.is_eliminated() {
-            " — ELIMINATED"
-        } else {
-            ""
-        };
-        format!("{}/100{state}", tank.health)
-    };
-    if let MatchState::Winner(player) = turn.match_state {
-        return format!(
-            "{} WINS\nPlayer One: {}\nPlayer Two: {}",
-            player_name(player),
-            health(PlayerId::One),
-            health(PlayerId::Two)
-        );
-    }
-    if turn.match_state == MatchState::Draw {
-        return format!(
-            "DRAW\nPlayer One: {}\nPlayer Two: {}",
-            health(PlayerId::One),
-            health(PlayerId::Two)
-        );
-    }
-    let status = match turn.phase {
-        TurnPhase::Choosing => {
-            "CHOOSE ACTION — arrows aim, -/= power, hold to repeat, Shift coarse, Space fire, M move".to_owned()
+) -> TacticalHudView {
+    let action = if turn.match_state != MatchState::InProgress {
+        HudAction::Finished
+    } else {
+        match turn.phase {
+            TurnPhase::Choosing => HudAction::Choose,
+            TurnPhase::Moving { .. } => HudAction::Moving,
+            TurnPhase::ResolvingFire => HudAction::Resolving,
+            TurnPhase::Finished => HudAction::Finished,
         }
-        TurnPhase::Moving { remaining_steps } => {
-            let rejection = match feedback {
-                Some(MovementRejection::Bounds) => " — blocked: battlefield edge",
-                Some(MovementRejection::Slope) => " — blocked: terrain too steep",
-                None => "",
-            };
-            format!("MOVING — {remaining_steps} steps left — I/J/K/L move, Enter finish{rejection}")
-        }
-        TurnPhase::ResolvingFire => "RESOLVING SHOT — action locked".to_owned(),
-        TurnPhase::Finished => "MATCH FINISHED — action locked".to_owned(),
     };
-    let player_name = player_name(turn.current_player);
-    let aiming = turn.current_aim();
-    format!(
-        "{player_name}\nPlayer One health: {}\nPlayer Two health: {}\nAzimuth: {:.0}°\nElevation: {:.0}°\nPower: {:.1} units/s\n{}\n{status}",
-        health(PlayerId::One),
-        health(PlayerId::Two),
-        aiming.azimuth_degrees,
-        aiming.elevation_degrees,
-        aiming.launch_speed,
-        format_wind(wind, aiming.azimuth_degrees),
-    )
+    TacticalHudView {
+        active_player: (turn.match_state == MatchState::InProgress).then_some(turn.current_player),
+        action,
+        player_one_health: tanks[0].health,
+        player_two_health: tanks[1].health,
+        player_one_eliminated: tanks[0].is_eliminated(),
+        player_two_eliminated: tanks[1].is_eliminated(),
+        aim: (turn.match_state == MatchState::InProgress).then_some(turn.current_aim()),
+        wind,
+        movement: turn.remaining_movement().map(|steps| (steps, feedback)),
+        result: turn.match_state,
+    }
 }
 
-fn format_wind(wind: Wind, azimuth_degrees: f32) -> String {
-    let acceleration = wind.horizontal_acceleration();
-    let relation = wind_relative_to_aim(wind, azimuth_degrees);
-    format!(
-        "Wind: relative {relation}; world ({:+.1} X, {:+.1} Z); {:.1} units/s^2",
-        acceleration.x,
-        acceleration.z,
-        wind.strength()
-    )
+/// Presentation observes state only; no HUD path mutates gameplay or gates fixed simulation.
+fn sync_tactical_hud(
+    turn: Res<CurrentTurn>,
+    tanks: Res<Tanks>,
+    wind: Res<BattlefieldWind>,
+    feedback: Res<MovementFeedback>,
+    mut text: Query<(&HudText, &mut Text)>,
+    mut fills: Query<(&HudHealthFill, &mut Node)>,
+    mut decorations: HudDecorations,
+) {
+    let view = tactical_hud_view(turn.0, tanks.0, wind.0, feedback.0);
+    for (field, mut value) in &mut text {
+        value.0 = hud_field_text(field.0, view);
+    }
+    for (fill, mut node) in &mut fills {
+        let health = if fill.0 == PlayerId::One {
+            view.player_one_health
+        } else {
+            view.player_two_health
+        };
+        node.width = percent(health as f32 / MAX_HEALTH as f32 * 100.0);
+    }
+    let active_colour = view
+        .active_player
+        .map_or(Color::srgb(0.45, 0.45, 0.45), player_color);
+    let (x, z) = wind_plot_offset(view.wind);
+    for (mut node, wind_marker, border, active_panel) in &mut decorations {
+        if wind_marker.is_some() {
+            node.left = px(44.0 + x);
+            node.top = px(33.0 - z);
+        }
+        if active_panel.is_some()
+            && let Some(mut border) = border
+        {
+            border.top = active_colour;
+            border.right = active_colour;
+            border.bottom = active_colour;
+            border.left = active_colour;
+        }
+    }
+}
+
+/// Maps world wind to the small HUD plot: +X is right and +Z is up.  The
+/// normalisation deliberately represents direction while the adjacent number
+/// represents strength; calm wind stays at the axis origin.
+fn wind_plot_offset(wind: Wind) -> (f32, f32) {
+    let vector = wind.horizontal_acceleration();
+    let strength = wind.strength();
+    if strength == 0.0 {
+        (0.0, 0.0)
+    } else {
+        (vector.x / strength * 24.0, vector.z / strength * 24.0)
+    }
+}
+
+fn hud_field_text(field: HudTextField, view: TacticalHudView) -> String {
+    match field {
+        HudTextField::Match => match view.result {
+            MatchState::Winner(player) => format!("{} WINS", player_name(player)),
+            MatchState::Draw => "DRAW".into(),
+            MatchState::InProgress => format!(
+                "{} - {}",
+                player_name(view.active_player.unwrap()),
+                match view.action {
+                    HudAction::Choose => "CHOOSE ACTION",
+                    HudAction::Moving => "MOVING",
+                    HudAction::Resolving => "RESOLVING SHOT",
+                    HudAction::Finished => "MATCH OVER",
+                }
+            ),
+        },
+        HudTextField::PlayerOneHealth => player_health_text(
+            "PLAYER ONE",
+            view.player_one_health,
+            view.player_one_eliminated,
+        ),
+        HudTextField::PlayerTwoHealth => player_health_text(
+            "PLAYER TWO",
+            view.player_two_health,
+            view.player_two_eliminated,
+        ),
+        HudTextField::Aim => view.aim.map_or_else(
+            || "AIM LOCKED".into(),
+            |a| {
+                format!(
+                    "AZ {:.0}\nEL {:.0}\nPOWER {:.1}",
+                    a.azimuth_degrees, a.elevation_degrees, a.launch_speed
+                )
+            },
+        ),
+        HudTextField::Wind => {
+            let a = view.wind.horizontal_acceleration();
+            format!(
+                "WIND {:.1}\nX {:+.1}  Z {:+.1}",
+                view.wind.strength(),
+                a.x,
+                a.z
+            )
+        }
+        HudTextField::Movement => view.movement.map_or_else(String::new, |(s, r)| {
+            format!(
+                "MOVE: {s} LEFT{}",
+                match r {
+                    Some(MovementRejection::Bounds) => " - EDGE",
+                    Some(MovementRejection::Slope) => " - STEEP",
+                    None => "",
+                }
+            )
+        }),
+        HudTextField::Controls => match view.action {
+            HudAction::Choose => "M MOVE | SPACE FIRE\nARROWS AIM | -/= POWER".into(),
+            HudAction::Moving => "ARROWS MOVE (CAMERA) | ENTER END".into(),
+            HudAction::Resolving | HudAction::Finished => String::new(),
+        },
+    }
+}
+fn player_health_text(name: &str, health: u8, out: bool) -> String {
+    if out {
+        format!("{name}: OUT")
+    } else {
+        format!("{name}: {health}/{MAX_HEALTH}")
+    }
+}
+fn player_color(player: PlayerId) -> Color {
+    match player {
+        PlayerId::One => Color::srgb(0.85, 0.25, 0.18),
+        PlayerId::Two => Color::srgb(0.18, 0.4, 0.85),
+    }
 }
 
 /// Selects one gentle, constant wind for the match. The sampled value becomes authoritative
@@ -742,33 +1062,6 @@ fn wind_from_seed(mut seed: u64) -> Wind {
 fn next_random_fraction(seed: &mut u64) -> f32 {
     *seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
     ((*seed >> 40) as f32) / ((1_u32 << 24) as f32)
-}
-
-/// Gives the player a barrel-relative direction, independent of the camera or world axes.
-fn wind_relative_to_aim(wind: Wind, azimuth_degrees: f32) -> &'static str {
-    let acceleration = wind.horizontal_acceleration();
-    if wind.strength() == 0.0 {
-        return "calm";
-    }
-    let azimuth = azimuth_degrees.to_radians();
-    let forward_x = azimuth.sin();
-    let forward_z = -azimuth.cos();
-    let right_x = -forward_z;
-    let right_z = forward_x;
-    let forward = acceleration.x * forward_x + acceleration.z * forward_z;
-    let right = acceleration.x * right_x + acceleration.z * right_z;
-    let sector = (right.atan2(forward).to_degrees() / 45.0).round() as i32;
-    match sector.rem_euclid(8) {
-        0 => "ahead",
-        1 => "ahead-right",
-        2 => "right",
-        3 => "behind-right",
-        4 => "behind",
-        5 => "behind-left",
-        6 => "left",
-        7 => "ahead-left",
-        _ => unreachable!("the wind sector is normalized to eight directions"),
-    }
 }
 
 fn player_name(player: PlayerId) -> &'static str {
@@ -1304,7 +1597,7 @@ mod tests {
             aiming_adjustments(&keyboard, 0.0, &mut repeats),
             vec![
                 (AimAdjustment::AzimuthDecrease, 1),
-                (AimAdjustment::ElevationIncrease, 1),
+                (AimAdjustment::ElevationDecrease, 1),
                 (AimAdjustment::PowerIncrease, 1),
             ]
         );
@@ -1314,6 +1607,32 @@ mod tests {
         keyboard.press(KeyCode::ArrowLeft);
         keyboard.press(KeyCode::ArrowRight);
         assert!(aiming_adjustments(&keyboard, 0.0, &mut repeats).is_empty());
+    }
+
+    #[test]
+    fn movement_mode_maps_arrows_to_camera_relative_cardinal_steps() {
+        let cases = [
+            (KeyCode::ArrowUp, MovementDirection::NegativeZ),
+            (KeyCode::ArrowLeft, MovementDirection::NegativeX),
+            (KeyCode::ArrowDown, MovementDirection::PositiveZ),
+            (KeyCode::ArrowRight, MovementDirection::PositiveX),
+        ];
+        for (key, expected) in cases {
+            let mut keyboard = ButtonInput::default();
+            keyboard.press(key);
+            assert_eq!(movement_direction(&keyboard, 0.0), Some(expected));
+        }
+
+        let mut rotated = ButtonInput::default();
+        rotated.press(KeyCode::ArrowUp);
+        assert_eq!(
+            movement_direction(&rotated, std::f32::consts::FRAC_PI_2),
+            Some(MovementDirection::NegativeX)
+        );
+
+        let mut retired = ButtonInput::default();
+        retired.press(KeyCode::KeyI);
+        assert_eq!(movement_direction(&retired, 0.0), None);
     }
 
     #[test]
@@ -1354,7 +1673,7 @@ mod tests {
         let player_two_before = turn.aim_for(PlayerId::Two);
         let mut keyboard = ButtonInput::default();
         let mut repeats = AimRepeatState::default();
-        keyboard.press(KeyCode::ArrowUp);
+        keyboard.press(KeyCode::ArrowDown);
 
         for _ in 0..100 {
             for (adjustment, count) in aiming_adjustments(&keyboard, 1.0, &mut repeats) {
@@ -1372,7 +1691,7 @@ mod tests {
     }
 
     #[test]
-    fn in_progress_hud_states_show_the_ascii_player_relative_wind_readout() {
+    fn tactical_hud_view_is_read_only_and_tracks_turn_specific_state() {
         let terrain = BattlefieldTerrain::initial();
         let tanks = initial_tanks(&terrain);
         let wind = Wind::new(WorldVector {
@@ -1382,16 +1701,80 @@ mod tests {
         })
         .unwrap();
         let choosing = initial_turn_state(tanks);
-        let wind_line = format_wind(wind, choosing.current_aim().azimuth_degrees);
-        assert!(format_aiming_hud(choosing, tanks, wind, None).contains(&wind_line));
+        let choosing_view = tactical_hud_view(choosing, tanks, wind, None);
+        assert_eq!(choosing_view.active_player, Some(PlayerId::One));
+        assert_eq!(choosing_view.action, HudAction::Choose);
+        assert_eq!(choosing_view.player_one_health, MAX_HEALTH);
+        assert_eq!(choosing_view.player_two_health, MAX_HEALTH);
+        assert_eq!(choosing_view.aim, Some(choosing.current_aim()));
+        assert_eq!(choosing_view.movement, None);
 
         let mut moving = choosing;
         assert!(moving.begin_movement());
-        assert!(format_aiming_hud(moving, tanks, wind, None).contains(&wind_line));
+        let moving_view = tactical_hud_view(moving, tanks, wind, Some(MovementRejection::Slope));
+        assert_eq!(moving_view.action, HudAction::Moving);
+        assert_eq!(
+            moving_view.movement,
+            Some((
+                moving.remaining_movement().unwrap(),
+                Some(MovementRejection::Slope)
+            ))
+        );
 
         let mut resolving = choosing;
         assert!(resolving.begin_fire().is_some());
-        assert!(format_aiming_hud(resolving, tanks, wind, None).contains(&wind_line));
+        let resolving_view = tactical_hud_view(resolving, tanks, wind, None);
+        assert_eq!(resolving_view.action, HudAction::Resolving);
+        assert_eq!(resolving_view.aim, Some(resolving.current_aim()));
+    }
+
+    #[test]
+    fn hud_wind_plot_uses_ascii_world_axes_and_keeps_calm_at_origin() {
+        let calm = Wind::new(WorldVector::ZERO).unwrap();
+        let positive_x = Wind::new(WorldVector {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+        })
+        .unwrap();
+        let negative_x = Wind::new(WorldVector {
+            x: -1.0,
+            y: 0.0,
+            z: 0.0,
+        })
+        .unwrap();
+        let positive_z = Wind::new(WorldVector {
+            x: 0.0,
+            y: 0.0,
+            z: 1.0,
+        })
+        .unwrap();
+        let negative_z = Wind::new(WorldVector {
+            x: 0.0,
+            y: 0.0,
+            z: -1.0,
+        })
+        .unwrap();
+
+        assert_eq!(wind_plot_offset(calm), (0.0, 0.0));
+        assert_eq!(wind_plot_offset(positive_x), (24.0, 0.0));
+        assert_eq!(wind_plot_offset(negative_x), (-24.0, 0.0));
+        assert_eq!(wind_plot_offset(positive_z), (0.0, 24.0));
+        assert_eq!(wind_plot_offset(negative_z), (0.0, -24.0));
+    }
+
+    #[test]
+    fn hud_text_hides_contextual_controls_after_actions_resolve() {
+        let terrain = BattlefieldTerrain::initial();
+        let tanks = initial_tanks(&terrain);
+        let wind = Wind::new(WorldVector::ZERO).unwrap();
+        let choosing = tactical_hud_view(initial_turn_state(tanks), tanks, wind, None);
+        assert!(hud_field_text(HudTextField::Controls, choosing).contains("M MOVE"));
+
+        let mut resolving_turn = initial_turn_state(tanks);
+        assert!(resolving_turn.begin_fire().is_some());
+        let resolving = tactical_hud_view(resolving_turn, tanks, wind, None);
+        assert!(hud_field_text(HudTextField::Controls, resolving).is_empty());
     }
 
     #[test]
@@ -1404,20 +1787,6 @@ mod tests {
         assert_ne!(first, different);
         assert!((MINIMUM_WIND_STRENGTH..=MAXIMUM_WIND_STRENGTH).contains(&first.strength()));
         assert_eq!(first.horizontal_acceleration().y, 0.0);
-    }
-
-    #[test]
-    fn wind_direction_is_relative_to_the_current_barrel_aim() {
-        let toward_positive_x = Wind::new(WorldVector {
-            x: 1.0,
-            y: 0.0,
-            z: 0.0,
-        })
-        .unwrap();
-
-        assert_eq!(wind_relative_to_aim(toward_positive_x, 0.0), "right");
-        assert_eq!(wind_relative_to_aim(toward_positive_x, 90.0), "ahead");
-        assert_eq!(wind_relative_to_aim(toward_positive_x, 180.0), "left");
     }
 
     #[test]

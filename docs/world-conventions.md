@@ -56,10 +56,10 @@ development defaults.
   gentle 0.75–1.75 units/s² strength are selected once when a match begins. It affects projectile
   position and velocity on each fixed simulation step, so its displacement accumulates with flight
   time.
-- The current text HUD reports a barrel-relative direction such as `ahead`, `right`, or
-  `behind-left`, alongside signed X/Z values. It updates while that player aims and is independent
-  of camera orientation. A graphical wind indicator is deferred until the HUD receives its planned
-  graphical frame.
+- The graphical tactical HUD shows wind strength plus a world-axis plot. `+X` is drawn to the
+  right and `+Z` upward; its marker is displaced in the direction the wind accelerates a
+  projectile. The plot is camera- and barrel-independent, so it does not reveal an opponent's
+  position or change as the camera transitions. Calm wind leaves the marker at the origin.
 - Wind has no Y component in this first model. Gravity remains the only vertical environmental
   acceleration, and wind does not affect tanks, movement, support settling, explosions, terrain,
   or camera presentation.
@@ -70,8 +70,10 @@ development defaults.
 
 - At the start of a turn, the current player chooses one primary action: Space starts the existing
   firing action, while M starts movement. The player cannot normally move and fire in one turn.
-- A movement action starts with six one-unit cardinal requests: I is negative Z, J is negative X,
-  K is positive Z, and L is positive X. Enter ends movement early and forfeits unused requests.
+- A movement action starts with six one-unit cardinal requests. Its arrow bindings are relative to
+  the current camera view: Up is into the view, Down is out, and Left/Right cross it. At a diagonal
+  camera yaw, the input selects the nearest cardinal world step. Enter ends movement early and
+  forfeits unused requests.
   This request-based model is deterministic and deliberately does not use render-frame duration.
 - A requested destination must remain within the battlefield and differ from the current terrain
   surface at the starting horizontal position by no more than 0.75 units. Valid movement sets the
@@ -103,7 +105,7 @@ development defaults.
 
 ## Tactical Controls and Presentation
 
-- On a choosing turn, Left/Right decrease/increase azimuth, Up/Down increase/decrease elevation,
+- On a choosing turn, Left/Right decrease/increase azimuth, Up/Down decrease/increase elevation,
   and `-`/`=` decrease/increase power. Each press applies one fine adjustment immediately; a held
   eligible key repeats after 300 ms and then every 100 ms. Shift uses the existing coarse amount.
   Opposite keys on the same axis cancel rather than selecting an arbitrary direction.
@@ -114,6 +116,9 @@ development defaults.
   changing azimuth smoothly carries that view around the horizontal axis. A fired shot seeks a
   wider bounded battlefield view. Render-time interpolation can be interrupted by newer turn or
   flight state, and never delays input, projectile simulation, terrain deformation, or handoff.
+- The graphical tactical HUD is presentation-only as well. Its player/health, aim/wind, and
+  contextual movement/control panels derive from authoritative state but cannot mutate it or gate
+  fixed simulation.
 
 ## First Duel Damage and Victory
 
