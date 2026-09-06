@@ -9,14 +9,16 @@ fidelity. Ridiculous weapons and strange battlefields are welcome when they make
 
 ## Status
 
-Basic move-or-fire artillery loop. Azimuth renders two distinct tank placeholders on a bounded,
+First playable local duel. Azimuth renders two distinct tank placeholders on a bounded,
 non-flat, deformable battlefield. Player One and Player Two take deterministic turns: the current
 player either fires one shot or sacrifices that shot to reposition. Movement is six deliberate
 one-unit cardinal steps over current terrain, including craters; steep terrain and battlefield
 edges block a step without spending allowance. Each player retains their own aiming values, so a
 move changes the firing origin and world-space solution without erasing prior knowledge. The boom
-remains presentation only. Azimuth still has no damage, tank settling after later terrain changes,
-victory, audio content, or networking.
+remains presentation only. Terrain impacts deal distance-based splash damage: both tanks begin at
+100 health, blasts reach 6 world units, and a centre hit deals up to 40 damage. A tank at zero
+health is eliminated; the final survivor wins and mutual elimination draws. Azimuth still has no
+tank settling after later terrain changes, audio content, or networking.
 
 ## Prerequisites
 

@@ -8,12 +8,21 @@ pub enum TurnPhase {
     Choosing,
     Moving { remaining_steps: u8 },
     ResolvingFire,
+    Finished,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MatchState {
+    InProgress,
+    Winner(PlayerId),
+    Draw,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TurnState {
     pub current_player: PlayerId,
     pub phase: TurnPhase,
+    pub match_state: MatchState,
     player_one_aim: AimingState,
     player_two_aim: AimingState,
 }
@@ -23,6 +32,7 @@ impl TurnState {
         Self {
             current_player: PlayerId::One,
             phase: TurnPhase::Choosing,
+            match_state: MatchState::InProgress,
             player_one_aim,
             player_two_aim,
         }
@@ -40,7 +50,7 @@ impl TurnState {
     }
 
     pub fn apply_current_aim(&mut self, adjustment: AimAdjustment, coarse: bool) -> bool {
-        if self.phase != TurnPhase::Choosing {
+        if self.match_state != MatchState::InProgress || self.phase != TurnPhase::Choosing {
             return false;
         }
         match self.current_player {
@@ -51,7 +61,7 @@ impl TurnState {
     }
 
     pub fn begin_movement(&mut self) -> bool {
-        if self.phase != TurnPhase::Choosing {
+        if self.match_state != MatchState::InProgress || self.phase != TurnPhase::Choosing {
             return false;
         }
         self.phase = TurnPhase::Moving {
@@ -63,7 +73,7 @@ impl TurnState {
     pub fn remaining_movement(self) -> Option<u8> {
         match self.phase {
             TurnPhase::Moving { remaining_steps } => Some(remaining_steps),
-            TurnPhase::Choosing | TurnPhase::ResolvingFire => None,
+            TurnPhase::Choosing | TurnPhase::ResolvingFire | TurnPhase::Finished => None,
         }
     }
 
@@ -87,7 +97,7 @@ impl TurnState {
     }
 
     pub fn finish_movement(&mut self) -> bool {
-        if self.remaining_movement().is_none() {
+        if self.match_state != MatchState::InProgress || self.remaining_movement().is_none() {
             return false;
         }
         self.advance_to_next_choosing();
@@ -95,18 +105,28 @@ impl TurnState {
     }
 
     pub fn begin_fire(&mut self) -> Option<(PlayerId, AimingState)> {
-        if self.phase != TurnPhase::Choosing {
+        if self.match_state != MatchState::InProgress || self.phase != TurnPhase::Choosing {
             return None;
         }
         self.phase = TurnPhase::ResolvingFire;
         Some((self.current_player, self.current_aim()))
     }
 
-    pub fn complete_resolution(&mut self) -> bool {
+    pub fn complete_resolution_after_damage(&mut self, survivors: [bool; 2]) -> bool {
         if self.phase != TurnPhase::ResolvingFire {
             return false;
         }
-        self.advance_to_next_choosing();
+        self.match_state = match survivors {
+            [true, true] => MatchState::InProgress,
+            [true, false] => MatchState::Winner(PlayerId::One),
+            [false, true] => MatchState::Winner(PlayerId::Two),
+            [false, false] => MatchState::Draw,
+        };
+        if self.match_state == MatchState::InProgress {
+            self.advance_to_next_choosing();
+        } else {
+            self.phase = TurnPhase::Finished;
+        }
         true
     }
 
@@ -155,7 +175,7 @@ mod tests {
         let fired = state.begin_fire();
         assert_eq!(fired, Some((PlayerId::One, state.aim_for(PlayerId::One))));
         assert_eq!(state.phase, TurnPhase::ResolvingFire);
-        assert!(state.complete_resolution());
+        assert!(state.complete_resolution_after_damage([true, true]));
         assert_eq!(state.current_player, PlayerId::Two);
         assert_eq!(state.phase, TurnPhase::Choosing);
     }
@@ -196,7 +216,7 @@ mod tests {
         let player_two = state.current_aim();
         state.apply_current_aim(AimAdjustment::PowerDecrease, false);
         state.begin_fire();
-        state.complete_resolution();
+        state.complete_resolution_after_damage([true, true]);
 
         assert_eq!(state.current_player, PlayerId::One);
         assert_eq!(state.current_aim(), changed_player_one);
@@ -233,12 +253,33 @@ mod tests {
                     state.apply_current_aim(AimAdjustment::AzimuthIncrease, false);
                     state.begin_fire();
                     trace.push((state.current_player, state.phase, state.current_aim()));
-                    state.complete_resolution();
+                    state.complete_resolution_after_damage([true, true]);
                 }
                 trace.push((state.current_player, state.phase, state.current_aim()));
             }
             trace
         }
         assert_eq!(play_trace(), play_trace());
+    }
+
+    #[test]
+    fn lethal_resolution_finishes_match_and_rejects_actions() {
+        let mut state = state();
+        state.begin_fire();
+        assert!(state.complete_resolution_after_damage([true, false]));
+        assert_eq!(state.match_state, MatchState::Winner(PlayerId::One));
+        assert_eq!(state.phase, TurnPhase::Finished);
+        assert!(!state.begin_movement());
+        assert!(state.begin_fire().is_none());
+        assert!(!state.apply_current_aim(AimAdjustment::PowerIncrease, false));
+    }
+
+    #[test]
+    fn simultaneous_elimination_is_a_draw() {
+        let mut state = state();
+        state.begin_fire();
+        assert!(state.complete_resolution_after_damage([false, false]));
+        assert_eq!(state.match_state, MatchState::Draw);
+        assert_eq!(state.phase, TurnPhase::Finished);
     }
 }

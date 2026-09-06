@@ -17,6 +17,13 @@ impl WorldPosition {
             z: self.z + offset.z,
         }
     }
+
+    pub fn distance_to(self, other: Self) -> f32 {
+        let x = self.x - other.x;
+        let y = self.y - other.y;
+        let z = self.z - other.z;
+        (x * x + y * y + z * z).sqrt()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

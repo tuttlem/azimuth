@@ -80,3 +80,13 @@ development defaults.
   changing azimuth smoothly carries that view around the horizontal axis. A fired shot seeks a
   wider bounded battlefield view. Render-time interpolation can be interrupted by newer turn or
   flight state, and never delays input, projectile simulation, terrain deformation, or handoff.
+
+## First Duel Damage and Victory
+
+- Every terrain impact has an authoritative 6-unit gameplay damage radius independent of the boom.
+  Its full 3D distance to each tank base determines `ceil(40 * (1 - distance / 6))` damage strictly
+  inside the radius; the edge and exterior deal zero damage. Both tanks start at 100 health, and
+  the firing tank is not immune.
+- Damage for both tanks is calculated from the same impact before either health changes. Zero health
+  eliminates a tank. One survivor wins; no survivors draw. Damage, crater, survivor selection, and
+  match result settle before any turn handoff or presentation timing.

@@ -28,7 +28,7 @@ These milestones represent the current intended development path.
 * [x] Implement a minimal turn loop.
 * [x] Implement the move-or-fire decision.
 * [x] Improve tactical controls and add presentation-only camera transitions.
-* [ ] Reach the first genuinely playable human-vs-human artillery match.
+* [x] Reach the first genuinely playable human-vs-human artillery match.
 
 The first major gameplay target is:
 
@@ -369,12 +369,12 @@ Tanks should initially be simple game pieces rather than realistic vehicles.
 
 ## Damage / Survival
 
-* [ ] Establish basic health/damage rules.
-* [ ] Apply explosion damage based on useful gameplay rules.
+* [x] Establish basic health/damage rules.
+* [x] Apply explosion damage based on useful gameplay rules.
 * [ ] Determine direct-hit behaviour.
-* [ ] Determine splash-damage behaviour.
+* [x] Determine splash-damage behaviour.
 * [ ] Determine fall/terrain-related damage if appropriate.
-* [ ] Destroy/eliminate tanks when appropriate.
+* [x] Destroy/eliminate tanks when appropriate.
 
 ## Later Tank Variety
 
@@ -438,8 +438,8 @@ Azimuth should remain fundamentally turn-based.
 * [x] Start player turn.
 * [x] Permit one primary turn action.
 * [x] Resolve action fully.
-* [ ] Advance to next surviving player.
-* [ ] Detect end-of-match state.
+* [x] Advance to next surviving player.
+* [x] Detect end-of-match state.
 
 ## Move-or-Fire Decision
 
@@ -457,7 +457,7 @@ The intended core tactical choice is:
 
 * [x] Complete projectile flight before turn advancement.
 * [x] Complete terrain deformation before turn advancement.
-* [ ] Complete damage resolution before turn advancement.
+* [x] Complete damage resolution before turn advancement.
 * [ ] Complete resulting tank displacement/destruction before turn advancement.
 * [x] Provide a clear transition to the next player.
 
@@ -568,8 +568,8 @@ Explosions should be satisfying visually and mechanically.
 
 ## Gameplay
 
-* [ ] Explosion radius.
-* [ ] Damage falloff.
+* [x] Explosion radius.
+* [x] Damage falloff.
 * [ ] Direct impact behaviour.
 * [x] Terrain deformation.
 * [ ] Force/impulse effects if useful.
@@ -674,10 +674,10 @@ Battlefields should differ through physical rules as well as terrain.
 
 ## Basic Victory
 
-* [ ] Last surviving player wins.
-* [ ] Detect winner.
-* [ ] End match cleanly.
-* [ ] Present result.
+* [x] Last surviving player wins.
+* [x] Detect winner.
+* [x] End match cleanly.
+* [x] Present result.
 
 ## Possible Variants
 
@@ -808,12 +808,12 @@ non-conflicting panning control remain separate work.
 * [ ] Wind.
 * [ ] Gravity.
 * [ ] Atmospheric information where relevant.
-* [ ] Health.
+* [x] Health.
 * [x] Movement allowance where relevant.
 
 ## Match HUD
 
-* [ ] Remaining players.
+* [x] Remaining players.
 * [ ] Turn order.
 * [x] Current turn/action state.
 * [ ] Environmental summary.
@@ -1037,27 +1037,27 @@ These are conceptual milestones rather than fixed specification sequences.
 
 ## Milestone C — First Boom
 
-* [ ] Projectile impact produces an explosion.
-* [ ] Explosion damages a target.
-* [ ] Explosion creates a crater.
-* [ ] Terrain collision updates correctly.
+* [x] Projectile impact produces an explosion.
+* [x] Explosion damages a target.
+* [x] Explosion creates a crater.
+* [x] Terrain collision updates correctly.
 
 ## Milestone D — First Duel
 
-* [ ] Two players exist.
-* [ ] Players can aim.
-* [ ] Players can fire.
-* [ ] Turns alternate.
-* [ ] Damage/elimination works.
-* [ ] One player can win.
+* [x] Two players exist.
+* [x] Players can aim.
+* [x] Players can fire.
+* [x] Turns alternate.
+* [x] Damage/elimination works.
+* [x] One player can win.
 
 **At this point Azimuth is a game.**
 
 ## Milestone E — Tactical Movement
 
-* [ ] Player can move instead of firing.
-* [ ] Terrain affects movement.
-* [ ] Movement breaks established firing solutions.
+* [x] Player can move instead of firing.
+* [x] Terrain affects movement.
+* [x] Movement breaks established firing solutions.
 * [ ] Craters and ridges influence positional choices.
 
 ## Milestone F — Environment

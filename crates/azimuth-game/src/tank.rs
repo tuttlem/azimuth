@@ -6,6 +6,7 @@ const FIRING_ORIGIN_HEIGHT: f32 = 1.0;
 pub const MOVEMENT_STEP_DISTANCE: f32 = 1.0;
 pub const MOVEMENT_ALLOWANCE: u8 = 6;
 pub const MAX_MOVEMENT_ELEVATION_CHANGE: f32 = 0.75;
+pub const MAX_HEALTH: u8 = 100;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TankFiringRepresentation {
@@ -94,6 +95,7 @@ pub struct TankPose {
 pub struct Tank {
     pub owner: PlayerId,
     pub pose: TankPose,
+    pub health: u8,
 }
 
 impl Tank {
@@ -120,7 +122,16 @@ impl Tank {
                 body_forward,
                 turret_forward,
             },
+            health: MAX_HEALTH,
         }
+    }
+
+    pub fn is_eliminated(self) -> bool {
+        self.health == 0
+    }
+
+    pub fn apply_damage(&mut self, damage: u8) {
+        self.health = self.health.saturating_sub(damage);
     }
 
     #[cfg(test)]

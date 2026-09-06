@@ -30,10 +30,10 @@ below it, the simulation refines the crossing with 24 fixed bisection iterations
 fast projectile from tunnelling through the terrain and produces a deterministic impact position
 close to the visible surface.
 
-An impact ends flight in that simulation step and records only a terrain-impact position. The
+An impact ends flight in that simulation step and records a terrain-impact position. The
 projectile has no bounce, penetration, or damage behaviour. That same authoritative impact
-immediately applies a permanent gameplay crater to the current battlefield before the firing turn
-can hand control to the other player. A shot that leaves the useful simulation volume without an
+immediately applies one distance-based duel blast and a permanent gameplay crater before the firing
+turn can hand control to the other player. A shot that leaves the useful simulation volume without an
 in-bounds terrain crossing instead ends without an impact result or crater and still completes the
 firing turn.
 

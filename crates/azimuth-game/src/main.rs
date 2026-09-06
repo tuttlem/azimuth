@@ -1,5 +1,6 @@
 mod aiming;
 mod battlefield;
+mod combat;
 mod projectile;
 mod tank;
 mod turn;
@@ -16,6 +17,7 @@ use bevy::{
     prelude::*,
     render::render_resource::PrimitiveTopology,
 };
+use combat::resolve_explosion;
 use projectile::{
     Gravity, Projectile, ProjectileAdvance, SimulationLimits, TerrainImpact,
     azimuth_from_horizontal_direction,
@@ -24,7 +26,7 @@ use tank::{
     HorizontalDirection, MovementDirection, MovementRejection, PlayerId, Tank,
     TankFiringRepresentation, initial_tanks,
 };
-use turn::{TurnPhase, TurnState};
+use turn::{MatchState, TurnPhase, TurnState};
 use world::WorldPosition;
 
 const CAMERA_MIN_DISTANCE: f32 = 8.0;
@@ -234,6 +236,7 @@ fn main() {
                 update_aiming_input,
                 update_movement_input,
                 sync_tank_pose,
+                sync_tank_elimination,
                 sync_tank_aim,
                 launch_aimed_projectile,
                 sync_aiming_hud,
@@ -304,7 +307,7 @@ fn spawn_battlefield_scene(
 
     commands.spawn((
         AimingHud,
-        Text::new(format_aiming_hud(turn.0, None)),
+        Text::new(format_aiming_hud(turn.0, tanks.0, None)),
         TextFont {
             font_size: 22.0,
             ..default()
@@ -606,15 +609,54 @@ fn sync_tank_pose(
     }
 }
 
+fn sync_tank_elimination(tanks: Res<Tanks>, mut visuals: Query<(&TankVisual, &mut Visibility)>) {
+    for (owner, mut visibility) in &mut visuals {
+        *visibility = if tank_for_player(tanks.0, owner.0).is_eliminated() {
+            Visibility::Hidden
+        } else {
+            Visibility::Visible
+        };
+    }
+}
+
 fn sync_aiming_hud(
     turn: Res<CurrentTurn>,
+    tanks: Res<Tanks>,
     feedback: Res<MovementFeedback>,
     mut hud: Single<&mut Text, With<AimingHud>>,
 ) {
-    hud.0 = format_aiming_hud(turn.0, feedback.0);
+    hud.0 = format_aiming_hud(turn.0, tanks.0, feedback.0);
 }
 
-fn format_aiming_hud(turn: TurnState, feedback: Option<MovementRejection>) -> String {
+fn format_aiming_hud(
+    turn: TurnState,
+    tanks: [Tank; 2],
+    feedback: Option<MovementRejection>,
+) -> String {
+    let health = |player| {
+        let tank = tank_for_player(tanks, player);
+        let state = if tank.is_eliminated() {
+            " — ELIMINATED"
+        } else {
+            ""
+        };
+        format!("{}/100{state}", tank.health)
+    };
+    if let MatchState::Winner(player) = turn.match_state {
+        return format!(
+            "{} WINS\nPlayer One: {}\nPlayer Two: {}",
+            player_name(player),
+            health(PlayerId::One),
+            health(PlayerId::Two)
+        );
+    }
+    if turn.match_state == MatchState::Draw {
+        return format!(
+            "DRAW\nPlayer One: {}\nPlayer Two: {}",
+            health(PlayerId::One),
+            health(PlayerId::Two)
+        );
+    }
     let status = match turn.phase {
         TurnPhase::Choosing => {
             "CHOOSE ACTION — arrows aim, -/= power, hold to repeat, Shift coarse, Space fire, M move".to_owned()
@@ -628,21 +670,31 @@ fn format_aiming_hud(turn: TurnState, feedback: Option<MovementRejection>) -> St
             format!("MOVING — {remaining_steps} steps left — I/J/K/L move, Enter finish{rejection}")
         }
         TurnPhase::ResolvingFire => "RESOLVING SHOT — action locked".to_owned(),
+        TurnPhase::Finished => "MATCH FINISHED — action locked".to_owned(),
     };
-    let player_name = match turn.current_player {
-        PlayerId::One => "Player One",
-        PlayerId::Two => "Player Two",
-    };
+    let player_name = player_name(turn.current_player);
     let aiming = turn.current_aim();
     format!(
-        "{player_name}\nAzimuth: {:.0}°\nElevation: {:.0}°\nPower: {:.1} units/s\n{status}",
-        aiming.azimuth_degrees, aiming.elevation_degrees, aiming.launch_speed,
+        "{player_name}\nPlayer One health: {}\nPlayer Two health: {}\nAzimuth: {:.0}°\nElevation: {:.0}°\nPower: {:.1} units/s\n{status}",
+        health(PlayerId::One),
+        health(PlayerId::Two),
+        aiming.azimuth_degrees,
+        aiming.elevation_degrees,
+        aiming.launch_speed,
     )
+}
+
+fn player_name(player: PlayerId) -> &'static str {
+    match player {
+        PlayerId::One => "Player One",
+        PlayerId::Two => "Player Two",
+    }
 }
 
 fn advance_projectile(
     gravity: Res<BattlefieldGravity>,
     mut terrain: ResMut<BattlefieldState>,
+    mut tanks: ResMut<Tanks>,
     mut flight: ResMut<ProjectileFlight>,
     mut latest_impact: ResMut<LatestTerrainImpact>,
     mut turn: ResMut<CurrentTurn>,
@@ -659,6 +711,7 @@ fn advance_projectile(
         projectile,
         advance,
         &mut terrain.0,
+        &mut tanks.0,
         &mut latest_impact.0,
         &mut turn.0,
     );
@@ -668,28 +721,34 @@ fn resolve_projectile_advance(
     projectile: Projectile,
     advance: ProjectileAdvance,
     terrain: &mut BattlefieldTerrain,
+    tanks: &mut [Tank; 2],
     latest_impact: &mut Option<TerrainImpact>,
     turn: &mut TurnState,
 ) -> Option<Projectile> {
     match advance {
         ProjectileAdvance::Active => Some(projectile),
         ProjectileAdvance::TerrainImpact(impact) => {
+            resolve_explosion(tanks, impact.position);
             terrain.apply_crater(impact.position, Crater::default_development());
             *latest_impact = Some(impact);
             assert!(
-                turn.complete_resolution(),
+                turn.complete_resolution_after_damage(survivors(tanks)),
                 "only a resolving shot may terminate"
             );
             None
         }
         ProjectileAdvance::OutOfBounds => {
             assert!(
-                turn.complete_resolution(),
+                turn.complete_resolution_after_damage(survivors(tanks)),
                 "only a resolving shot may terminate"
             );
             None
         }
     }
+}
+
+fn survivors(tanks: &[Tank; 2]) -> [bool; 2] {
+    [!tanks[0].is_eliminated(), !tanks[1].is_eliminated()]
 }
 
 fn sync_battlefield_mesh(
@@ -1309,7 +1368,7 @@ mod tests {
         assert!(turn.accept_movement_step());
         assert!(turn.finish_movement());
         assert!(turn.begin_fire().is_some());
-        assert!(turn.complete_resolution());
+        assert!(turn.complete_resolution_after_damage([true, true]));
 
         assert_eq!(turn.current_aim(), retained_aim);
         let after = launch_parameters_for_aim(tanks[0], turn.current_aim());
@@ -1337,6 +1396,7 @@ mod tests {
     #[test]
     fn projectile_resolution_keeps_active_turn_then_applies_crater_before_handoff() {
         let mut terrain = BattlefieldTerrain::initial();
+        let mut tanks = initial_tanks(&terrain);
         let mut impact = None;
         let mut turn = TurnState::new(
             AimingState::new(0.0, 45.0, 18.0),
@@ -1355,6 +1415,7 @@ mod tests {
             projectile,
             ProjectileAdvance::Active,
             &mut terrain,
+            &mut tanks,
             &mut impact,
             &mut turn,
         );
@@ -1373,6 +1434,7 @@ mod tests {
                 },
             }),
             &mut terrain,
+            &mut tanks,
             &mut impact,
             &mut turn,
         );
@@ -1386,6 +1448,7 @@ mod tests {
     #[test]
     fn out_of_bounds_resolution_advances_once_without_impact_or_terrain_change() {
         let mut terrain = BattlefieldTerrain::initial();
+        let mut tanks = initial_tanks(&terrain);
         let before = terrain.height(0.0, 0.0);
         let mut impact = None;
         let mut turn = TurnState::new(
@@ -1406,6 +1469,7 @@ mod tests {
                 projectile,
                 ProjectileAdvance::OutOfBounds,
                 &mut terrain,
+                &mut tanks,
                 &mut impact,
                 &mut turn,
             )
@@ -1415,6 +1479,6 @@ mod tests {
         assert_eq!(terrain.height(0.0, 0.0), before);
         assert_eq!(turn.current_player, PlayerId::Two);
         assert_eq!(turn.phase, TurnPhase::Choosing);
-        assert!(!turn.complete_resolution());
+        assert!(!turn.complete_resolution_after_damage([true, true]));
     }
 }
