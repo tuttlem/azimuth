@@ -65,18 +65,21 @@ external interface warrants it.
 
 ## Battlefield Controls
 
-The current camera is a development inspection tool, not the final gameplay camera:
+The camera presents the current turn and fired shots without owning gameplay timing:
 
 - Hold the right mouse button and drag to orbit the battlefield.
 - Scroll the mouse wheel to move closer to or farther from it.
-- Use WASD or arrow keys to pan across the battlefield.
 - Player One (red) begins, then turns alternate with Player Two (blue). The corner display names
   the authoritative current player and whether they are choosing, moving, or resolving a shot.
-  While choosing, use Q/E to
-  decrease/increase that player's azimuth, R/F to increase/decrease elevation, and T/G to
-  increase/decrease power. Hold Shift for coarse changes. Azimuth wraps through 0–359 degrees;
-  elevation is limited to 5–85 degrees; power is launch velocity limited to 8–30 abstract units
-  per second. Each player retains their own settings across the other player's turn.
+  At each choosing turn, the camera smoothly presents that player's tank behind their barrel's
+  horizontal aim direction; firing pulls it back to a wider battlefield view. These transitions
+  never delay input, flight, impact, or handoff.
+  While choosing, Left/Right decrease/increase azimuth, Up/Down increase/decrease elevation, and
+  `-`/`=` decrease/increase power. A press changes one fine increment immediately; holding a key
+  begins repeat after 300 ms and repeats every 100 ms. Hold Shift for coarse changes. Azimuth
+  wraps through 0–359 degrees; elevation is limited to 5–85 degrees; power is launch velocity
+  limited to 8–30 abstract units per second. Each player retains their own settings across the
+  other player's turn. WASD and the arrows do not pan the camera.
 - Press M to choose movement. I/J/K/L request one step toward negative Z/negative X/positive
   Z/positive X. A movement action starts with six steps; a valid step must stay within the
   battlefield and change terrain height by no more than 0.75 units. The display shows remaining

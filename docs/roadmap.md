@@ -27,7 +27,7 @@ These milestones represent the current intended development path.
 * [x] Add basic aiming controls: azimuth, elevation, and power.
 * [x] Implement a minimal turn loop.
 * [x] Implement the move-or-fire decision.
-* [ ] Improve tactical controls and add presentation-only camera transitions.
+* [x] Improve tactical controls and add presentation-only camera transitions.
 * [ ] Reach the first genuinely playable human-vs-human artillery match.
 
 The first major gameplay target is:
@@ -402,8 +402,8 @@ Aiming is the player's primary interaction with the physics system.
 * [x] Clearly present current aiming values.
 * [x] Provide sufficiently fine aiming control.
 * [x] Provide sufficiently fast coarse adjustment.
-* [ ] Remap aiming to directional keys and power keys that remain clear after manual camera panning is retired.
-* [ ] Support held-key repeat for deliberate aim adjustments without making aiming automatic.
+* [x] Remap aiming to directional keys and power keys that remain clear after manual camera panning is retired.
+* [x] Support held-key repeat for deliberate aim adjustments without making aiming automatic.
 
 ## Aiming Feedback
 
@@ -763,20 +763,20 @@ Watching the shot is part of the game.
 ## Battlefield Camera
 
 * [x] Orbit battlefield.
-* [x] Pan.
+* [ ] Pan.
 * [x] Zoom.
-* [ ] Focus current player.
+* [x] Focus current player.
 * [ ] Focus selected target area where useful.
-* [ ] Transition behind the active player's tank when that player's turn begins.
-* [ ] Retire manual keyboard camera panning when its keys are needed for tactical controls.
+* [x] Transition behind the active player's tank when that player's turn begins.
+* [x] Retire manual keyboard camera panning when its keys are needed for tactical controls.
 
 ## Projectile Camera
 
 * [ ] Track projectile in flight.
 * [ ] Maintain awareness of surrounding terrain.
-* [ ] Pull back to a readable general battlefield view when a projectile launches.
+* [x] Pull back to a readable general battlefield view when a projectile launches.
 * [ ] Transition naturally toward impact.
-* [ ] Avoid nausea-inducing camera behaviour.
+* [x] Avoid nausea-inducing camera behaviour.
 * [ ] Allow player to skip or accelerate long trajectories eventually if necessary.
 * [ ] Preserve the drama of watching shots rather than instantly resolving them.
 
@@ -785,15 +785,14 @@ Watching the shot is part of the game.
 * [ ] Frame explosion.
 * [ ] Show affected players.
 * [ ] Show terrain deformation.
-* [ ] Return clearly to the next player's perspective.
+* [x] Return clearly to the next player's perspective.
 
-## Tactical Camera and Repeating Controls — Next Feature
+## Tactical Camera and Repeating Controls
 
-The next bounded follow-up should pair the new tactical controls with camera behaviour: directional
-aim controls, power keys, held-key repeat, transition behind the active tank, pullback during shot
-flight, and return to the next player after authoritative resolution. Camera timing must remain
-presentation-only: it must not delay firing, movement, projectile simulation, terrain deformation,
-or turn advancement.
+Directional aim controls, held repeat, active-player presentation, and shot pullback are complete.
+Camera timing remains presentation-only: it does not delay firing, movement, projectile simulation,
+terrain deformation, or turn advancement. Projectile tracking, impact framing, and any future
+non-conflicting panning control remain separate work.
 
 ---
 

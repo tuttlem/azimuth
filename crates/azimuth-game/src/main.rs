@@ -29,10 +29,18 @@ use world::WorldPosition;
 
 const CAMERA_MIN_DISTANCE: f32 = 8.0;
 const CAMERA_MAX_DISTANCE: f32 = 60.0;
-const CAMERA_PAN_SPEED: f32 = 12.0;
 const CAMERA_ORBIT_SENSITIVITY: f32 = 0.005;
 const CAMERA_ZOOM_SPEED: f32 = 2.0;
 const CAMERA_PITCH_LIMIT: f32 = FRAC_PI_2 - 0.1;
+const CAMERA_TRANSITION_SPEED: f32 = 5.0;
+const ACTIVE_PLAYER_CAMERA_DISTANCE: f32 = 16.0;
+const ACTIVE_PLAYER_CAMERA_HEIGHT: f32 = 1.8;
+const ACTIVE_PLAYER_CAMERA_PITCH: f32 = -0.35;
+const SHOT_CAMERA_DISTANCE: f32 = 38.0;
+const SHOT_CAMERA_HEIGHT: f32 = 3.0;
+const SHOT_CAMERA_PITCH: f32 = -0.6;
+const AIM_REPEAT_DELAY_SECONDS: f32 = 0.3;
+const AIM_REPEAT_INTERVAL_SECONDS: f32 = 0.1;
 const PROJECTILE_FIXED_HZ: f64 = 120.0;
 const DEVELOPMENT_GRAVITY: f32 = 8.0;
 const EXPLOSION_VISUAL_DURATION_SECONDS: f32 = 0.6;
@@ -45,6 +53,43 @@ struct BattlefieldCamera {
     yaw: f32,
     pitch: f32,
     distance: f32,
+    presentation_intent: Option<CameraPresentationIntent>,
+    desired_pose: CameraPose,
+    tracked_aim_yaw: Option<f32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct CameraPose {
+    target: Vec3,
+    yaw: f32,
+    pitch: f32,
+    distance: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CameraPresentationIntent {
+    ActivePlayer(PlayerId),
+    WatchingShot,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AimKeyRepeat {
+    is_held: bool,
+    seconds_until_repeat: f32,
+}
+
+impl Default for AimKeyRepeat {
+    fn default() -> Self {
+        Self {
+            is_held: false,
+            seconds_until_repeat: 0.0,
+        }
+    }
+}
+
+#[derive(Resource, Default)]
+struct AimRepeatState {
+    keys: [AimKeyRepeat; 6],
 }
 
 #[derive(Resource)]
@@ -144,11 +189,20 @@ type TankMuzzleTransforms<'w, 's> = Query<
 
 impl Default for BattlefieldCamera {
     fn default() -> Self {
-        Self {
+        let pose = CameraPose {
             target: Vec3::ZERO,
             yaw: 0.0,
             pitch: -0.5,
             distance: 30.0,
+        };
+        Self {
+            target: pose.target,
+            yaw: pose.yaw,
+            pitch: pose.pitch,
+            distance: pose.distance,
+            presentation_intent: None,
+            desired_pose: pose,
+            tracked_aim_yaw: None,
         }
     }
 }
@@ -166,6 +220,7 @@ fn main() {
         .insert_resource(LatestTerrainImpact::default())
         .insert_resource(CurrentImpactExplosionConsumed::default())
         .insert_resource(MovementFeedback::default())
+        .insert_resource(AimRepeatState::default())
         .insert_resource(BattlefieldGravity(
             Gravity::new(DEVELOPMENT_GRAVITY).expect("development gravity must be valid"),
         ))
@@ -373,62 +428,91 @@ fn movement_direction(keyboard: &ButtonInput<KeyCode>) -> Option<MovementDirecti
 fn update_aiming_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     flight: Res<ProjectileFlight>,
+    time: Res<Time>,
+    mut repeat_state: ResMut<AimRepeatState>,
     mut turn: ResMut<CurrentTurn>,
 ) {
     if flight.0.is_some() || turn.0.phase != TurnPhase::Choosing {
+        repeat_state.reset();
         return;
     }
 
     let coarse = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
-    for adjustment in aiming_adjustments(&keyboard) {
-        turn.0.apply_current_aim(adjustment, coarse);
+    for (adjustment, count) in aiming_adjustments(&keyboard, time.delta_secs(), &mut repeat_state) {
+        for _ in 0..count {
+            turn.0.apply_current_aim(adjustment, coarse);
+        }
     }
 }
 
-fn aiming_adjustments(keyboard: &ButtonInput<KeyCode>) -> Vec<AimAdjustment> {
-    [
-        key_pair_adjustment(
-            keyboard,
-            KeyCode::KeyQ,
-            KeyCode::KeyE,
-            AimAdjustment::AzimuthDecrease,
-            AimAdjustment::AzimuthIncrease,
-        ),
-        key_pair_adjustment(
-            keyboard,
-            KeyCode::KeyF,
-            KeyCode::KeyR,
-            AimAdjustment::ElevationDecrease,
-            AimAdjustment::ElevationIncrease,
-        ),
-        key_pair_adjustment(
-            keyboard,
-            KeyCode::KeyG,
-            KeyCode::KeyT,
-            AimAdjustment::PowerDecrease,
-            AimAdjustment::PowerIncrease,
-        ),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
+impl AimRepeatState {
+    fn reset(&mut self) {
+        self.keys = [AimKeyRepeat::default(); 6];
+    }
 }
 
-fn key_pair_adjustment(
+fn aiming_adjustments(
     keyboard: &ButtonInput<KeyCode>,
-    decrease: KeyCode,
-    increase: KeyCode,
-    decrease_adjustment: AimAdjustment,
-    increase_adjustment: AimAdjustment,
-) -> Option<AimAdjustment> {
-    match (
-        keyboard.just_pressed(decrease),
-        keyboard.just_pressed(increase),
-    ) {
-        (true, false) => Some(decrease_adjustment),
-        (false, true) => Some(increase_adjustment),
-        _ => None,
+    delta_seconds: f32,
+    repeat_state: &mut AimRepeatState,
+) -> Vec<(AimAdjustment, u32)> {
+    let pressed = [
+        keyboard.pressed(KeyCode::ArrowLeft),
+        keyboard.pressed(KeyCode::ArrowRight),
+        keyboard.pressed(KeyCode::ArrowUp),
+        keyboard.pressed(KeyCode::ArrowDown),
+        keyboard.pressed(KeyCode::Minus),
+        keyboard.pressed(KeyCode::Equal),
+    ];
+    let adjustments = [
+        AimAdjustment::AzimuthDecrease,
+        AimAdjustment::AzimuthIncrease,
+        AimAdjustment::ElevationIncrease,
+        AimAdjustment::ElevationDecrease,
+        AimAdjustment::PowerDecrease,
+        AimAdjustment::PowerIncrease,
+    ];
+    let mut counts = [0; 6];
+
+    for (first, second) in [(0, 1), (2, 3), (4, 5)] {
+        match (pressed[first], pressed[second]) {
+            (true, false) => {
+                repeat_state.keys[second] = AimKeyRepeat::default();
+                counts[first] = repeat_count(&mut repeat_state.keys[first], delta_seconds);
+            }
+            (false, true) => {
+                repeat_state.keys[first] = AimKeyRepeat::default();
+                counts[second] = repeat_count(&mut repeat_state.keys[second], delta_seconds);
+            }
+            (false, false) | (true, true) => {
+                repeat_state.keys[first] = AimKeyRepeat::default();
+                repeat_state.keys[second] = AimKeyRepeat::default();
+            }
+        }
     }
+
+    adjustments
+        .into_iter()
+        .zip(counts)
+        .filter_map(|(adjustment, count)| (count > 0).then_some((adjustment, count)))
+        .collect()
+}
+
+fn repeat_count(repeat: &mut AimKeyRepeat, delta_seconds: f32) -> u32 {
+    if !repeat.is_held {
+        repeat.is_held = true;
+        repeat.seconds_until_repeat = AIM_REPEAT_DELAY_SECONDS;
+        return 1;
+    }
+
+    repeat.seconds_until_repeat -= delta_seconds.max(0.0);
+    if repeat.seconds_until_repeat > 0.0 {
+        return 0;
+    }
+
+    let repeats = 1 + (-repeat.seconds_until_repeat / AIM_REPEAT_INTERVAL_SECONDS).floor() as u32;
+    repeat.seconds_until_repeat += repeats as f32 * AIM_REPEAT_INTERVAL_SECONDS;
+    repeats
 }
 
 fn active_firing_representation(tank: Tank, aiming: AimingState) -> TankFiringRepresentation {
@@ -533,7 +617,7 @@ fn sync_aiming_hud(
 fn format_aiming_hud(turn: TurnState, feedback: Option<MovementRejection>) -> String {
     let status = match turn.phase {
         TurnPhase::Choosing => {
-            "CHOOSE ACTION — Q/E azimuth, R/F elevation, T/G power, Shift coarse, Space fire, M move".to_owned()
+            "CHOOSE ACTION — arrows aim, -/= power, hold to repeat, Shift coarse, Space fire, M move".to_owned()
         }
         TurnPhase::Moving { remaining_steps } => {
             let rejection = match feedback {
@@ -806,47 +890,110 @@ fn direction_transform(direction: HorizontalDirection) -> Transform {
 }
 
 fn update_battlefield_camera(
-    keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
     mut mouse_wheel: MessageReader<MouseWheel>,
     time: Res<Time>,
+    gameplay: (Res<Tanks>, Res<CurrentTurn>, Res<ProjectileFlight>),
     camera: Single<(&mut Transform, &mut BattlefieldCamera)>,
 ) {
+    let (tanks, turn, flight) = gameplay;
     let (mut transform, mut controller) = camera.into_inner();
+    let intent = camera_presentation_intent(turn.0, flight.0);
+    if controller.presentation_intent != Some(intent) {
+        controller.presentation_intent = Some(intent);
+        controller.desired_pose = camera_pose_for_intent(intent, tanks.0, turn.0);
+        controller.tracked_aim_yaw = active_aim_yaw(intent, turn.0);
+    } else if let Some(aim_yaw) = active_aim_yaw(intent, turn.0) {
+        if let Some(previous_aim_yaw) = controller.tracked_aim_yaw {
+            controller.desired_pose.yaw += shortest_angle_delta(previous_aim_yaw, aim_yaw);
+        }
+        controller.tracked_aim_yaw = Some(aim_yaw);
+    }
 
     if mouse_buttons.pressed(MouseButton::Right) {
         // Mouse motion already represents the full movement since the prior frame.
         controller.yaw -= mouse_motion.delta.x * CAMERA_ORBIT_SENSITIVITY;
         controller.pitch = (controller.pitch - mouse_motion.delta.y * CAMERA_ORBIT_SENSITIVITY)
             .clamp(-CAMERA_PITCH_LIMIT, CAMERA_PITCH_LIMIT);
+        controller.desired_pose.yaw = controller.yaw;
+        controller.desired_pose.pitch = controller.pitch;
     }
 
     for wheel in mouse_wheel.read() {
         controller.distance = (controller.distance - wheel.y * CAMERA_ZOOM_SPEED)
             .clamp(CAMERA_MIN_DISTANCE, CAMERA_MAX_DISTANCE);
+        controller.desired_pose.distance = controller.distance;
     }
 
-    let mut pan = Vec2::ZERO;
-    if keyboard.pressed(KeyCode::KeyA) || keyboard.pressed(KeyCode::ArrowLeft) {
-        pan.x -= 1.0;
-    }
-    if keyboard.pressed(KeyCode::KeyD) || keyboard.pressed(KeyCode::ArrowRight) {
-        pan.x += 1.0;
-    }
-    if keyboard.pressed(KeyCode::KeyW) || keyboard.pressed(KeyCode::ArrowUp) {
-        pan.y -= 1.0;
-    }
-    if keyboard.pressed(KeyCode::KeyS) || keyboard.pressed(KeyCode::ArrowDown) {
-        pan.y += 1.0;
-    }
-
-    if pan != Vec2::ZERO {
-        let pan = pan.normalize() * CAMERA_PAN_SPEED * time.delta_secs();
-        controller.target = clamp_camera_target(controller.target + Vec3::new(pan.x, 0.0, pan.y));
-    }
+    // Camera interpolation is presentation-only. No gameplay or fixed-update system reads this
+    // controller, so a slow transition can never delay input, projectile resolution, or handoff.
+    interpolate_camera_pose(&mut controller, time.delta_secs());
 
     *transform = camera_transform(&controller);
+}
+
+fn camera_presentation_intent(
+    turn: TurnState,
+    flight: Option<Projectile>,
+) -> CameraPresentationIntent {
+    if flight.is_some() {
+        CameraPresentationIntent::WatchingShot
+    } else {
+        CameraPresentationIntent::ActivePlayer(turn.current_player)
+    }
+}
+
+fn active_aim_yaw(intent: CameraPresentationIntent, turn: TurnState) -> Option<f32> {
+    match intent {
+        CameraPresentationIntent::ActivePlayer(player) => {
+            Some(-turn.aim_for(player).azimuth_degrees.to_radians())
+        }
+        CameraPresentationIntent::WatchingShot => None,
+    }
+}
+
+fn camera_pose_for_intent(
+    intent: CameraPresentationIntent,
+    tanks: [Tank; 2],
+    turn: TurnState,
+) -> CameraPose {
+    match intent {
+        CameraPresentationIntent::ActivePlayer(player) => {
+            let tank = tank_for_player(tanks, player);
+            CameraPose {
+                target: clamp_camera_target(
+                    to_bevy_position(tank.pose.position) + Vec3::Y * ACTIVE_PLAYER_CAMERA_HEIGHT,
+                ),
+                yaw: active_aim_yaw(intent, turn)
+                    .expect("an active-player camera intent must have aiming yaw"),
+                pitch: ACTIVE_PLAYER_CAMERA_PITCH,
+                distance: ACTIVE_PLAYER_CAMERA_DISTANCE,
+            }
+        }
+        CameraPresentationIntent::WatchingShot => CameraPose {
+            target: Vec3::Y * SHOT_CAMERA_HEIGHT,
+            yaw: 0.0,
+            pitch: SHOT_CAMERA_PITCH,
+            distance: SHOT_CAMERA_DISTANCE,
+        },
+    }
+}
+
+fn interpolate_camera_pose(camera: &mut BattlefieldCamera, delta_seconds: f32) {
+    let factor = camera_transition_factor(delta_seconds);
+    camera.target = camera.target.lerp(camera.desired_pose.target, factor);
+    camera.yaw += shortest_angle_delta(camera.yaw, camera.desired_pose.yaw) * factor;
+    camera.pitch = camera.pitch.lerp(camera.desired_pose.pitch, factor);
+    camera.distance = camera.distance.lerp(camera.desired_pose.distance, factor);
+}
+
+fn camera_transition_factor(delta_seconds: f32) -> f32 {
+    1.0 - (-CAMERA_TRANSITION_SPEED * delta_seconds.max(0.0)).exp()
+}
+
+fn shortest_angle_delta(from: f32, to: f32) -> f32 {
+    (to - from + std::f32::consts::PI).rem_euclid(std::f32::consts::TAU) - std::f32::consts::PI
 }
 
 fn camera_transform(camera: &BattlefieldCamera) -> Transform {
@@ -961,24 +1108,150 @@ mod tests {
     }
 
     #[test]
-    fn aiming_keys_select_expected_adjustments_and_opposites_cancel() {
+    fn directional_aiming_keys_select_expected_adjustments_and_opposites_cancel() {
         let mut keyboard = ButtonInput::default();
-        keyboard.press(KeyCode::KeyQ);
-        keyboard.press(KeyCode::KeyR);
-        keyboard.press(KeyCode::KeyT);
+        let mut repeats = AimRepeatState::default();
+        keyboard.press(KeyCode::ArrowLeft);
+        keyboard.press(KeyCode::ArrowUp);
+        keyboard.press(KeyCode::Equal);
         assert_eq!(
-            aiming_adjustments(&keyboard),
+            aiming_adjustments(&keyboard, 0.0, &mut repeats),
             vec![
-                AimAdjustment::AzimuthDecrease,
-                AimAdjustment::ElevationIncrease,
-                AimAdjustment::PowerIncrease,
+                (AimAdjustment::AzimuthDecrease, 1),
+                (AimAdjustment::ElevationIncrease, 1),
+                (AimAdjustment::PowerIncrease, 1),
             ]
         );
 
         keyboard = ButtonInput::default();
-        keyboard.press(KeyCode::KeyQ);
-        keyboard.press(KeyCode::KeyE);
-        assert!(aiming_adjustments(&keyboard).is_empty());
+        repeats.reset();
+        keyboard.press(KeyCode::ArrowLeft);
+        keyboard.press(KeyCode::ArrowRight);
+        assert!(aiming_adjustments(&keyboard, 0.0, &mut repeats).is_empty());
+    }
+
+    #[test]
+    fn held_aiming_key_repeats_after_the_configured_delay_and_stops_on_release() {
+        let mut keyboard = ButtonInput::default();
+        let mut repeats = AimRepeatState::default();
+        keyboard.press(KeyCode::ArrowRight);
+
+        assert_eq!(
+            aiming_adjustments(&keyboard, 0.0, &mut repeats),
+            vec![(AimAdjustment::AzimuthIncrease, 1)]
+        );
+        assert!(
+            aiming_adjustments(&keyboard, AIM_REPEAT_DELAY_SECONDS - 0.01, &mut repeats).is_empty()
+        );
+        assert_eq!(
+            aiming_adjustments(&keyboard, 0.01, &mut repeats),
+            vec![(AimAdjustment::AzimuthIncrease, 1)]
+        );
+        assert_eq!(
+            aiming_adjustments(&keyboard, AIM_REPEAT_INTERVAL_SECONDS * 2.0, &mut repeats),
+            vec![(AimAdjustment::AzimuthIncrease, 2)]
+        );
+
+        keyboard.release(KeyCode::ArrowRight);
+        assert!(aiming_adjustments(&keyboard, 1.0, &mut repeats).is_empty());
+        keyboard.press(KeyCode::ArrowRight);
+        assert_eq!(
+            aiming_adjustments(&keyboard, 0.0, &mut repeats),
+            vec![(AimAdjustment::AzimuthIncrease, 1)]
+        );
+    }
+
+    #[test]
+    fn directional_repeat_remains_bounded_and_changes_only_the_current_player() {
+        let terrain = BattlefieldTerrain::initial();
+        let mut turn = initial_turn_state(initial_tanks(&terrain));
+        let player_two_before = turn.aim_for(PlayerId::Two);
+        let mut keyboard = ButtonInput::default();
+        let mut repeats = AimRepeatState::default();
+        keyboard.press(KeyCode::ArrowUp);
+
+        for _ in 0..100 {
+            for (adjustment, count) in aiming_adjustments(&keyboard, 1.0, &mut repeats) {
+                for _ in 0..count {
+                    turn.apply_current_aim(adjustment, true);
+                }
+            }
+        }
+
+        assert_eq!(
+            turn.current_aim().elevation_degrees,
+            aiming::MAX_ELEVATION_DEGREES
+        );
+        assert_eq!(turn.aim_for(PlayerId::Two), player_two_before);
+    }
+
+    #[test]
+    fn camera_intent_observes_turn_and_flight_without_owning_either() {
+        let terrain = BattlefieldTerrain::initial();
+        let tanks = initial_tanks(&terrain);
+        let mut turn = initial_turn_state(tanks);
+        assert_eq!(
+            camera_presentation_intent(turn, None),
+            CameraPresentationIntent::ActivePlayer(PlayerId::One)
+        );
+
+        let projectile = Projectile::launch(turn.current_aim().shot_parameters(WorldPosition {
+            x: 0.0,
+            y: 5.0,
+            z: 0.0,
+        }));
+        assert_eq!(
+            camera_presentation_intent(turn, Some(projectile)),
+            CameraPresentationIntent::WatchingShot
+        );
+
+        assert!(turn.begin_movement());
+        assert!(turn.finish_movement());
+        assert_eq!(
+            camera_presentation_intent(turn, None),
+            CameraPresentationIntent::ActivePlayer(PlayerId::Two)
+        );
+    }
+
+    #[test]
+    fn camera_pose_is_bounded_and_transition_does_not_change_turn_state() {
+        let terrain = BattlefieldTerrain::initial();
+        let tanks = initial_tanks(&terrain);
+        let turn = initial_turn_state(tanks);
+        let pose = camera_pose_for_intent(
+            CameraPresentationIntent::ActivePlayer(PlayerId::One),
+            tanks,
+            turn,
+        );
+        assert!(pose.target.x.abs() <= HALF_EXTENT);
+        assert!(pose.target.z.abs() <= HALF_EXTENT);
+        assert!((CAMERA_MIN_DISTANCE..=CAMERA_MAX_DISTANCE).contains(&pose.distance));
+
+        let mut camera = BattlefieldCamera {
+            desired_pose: pose,
+            ..default()
+        };
+        interpolate_camera_pose(&mut camera, 1.0);
+        assert_eq!(turn.current_player, PlayerId::One);
+        assert_eq!(turn.phase, TurnPhase::Choosing);
+    }
+
+    #[test]
+    fn active_player_camera_yaw_follows_retained_barrel_aim_not_body_facing() {
+        let terrain = BattlefieldTerrain::initial();
+        let tanks = initial_tanks(&terrain);
+        let mut turn = initial_turn_state(tanks);
+        let intent = CameraPresentationIntent::ActivePlayer(PlayerId::One);
+        let before = camera_pose_for_intent(intent, tanks, turn);
+        turn.apply_current_aim(AimAdjustment::AzimuthIncrease, false);
+        let after = camera_pose_for_intent(intent, tanks, turn);
+
+        assert_ne!(before.yaw, after.yaw);
+        assert!(
+            (shortest_angle_delta(before.yaw, after.yaw) + aiming::FINE_ANGLE_DEGREES.to_radians())
+                .abs()
+                < 0.000_01
+        );
     }
 
     #[test]

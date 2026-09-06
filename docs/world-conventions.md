@@ -66,3 +66,17 @@ development defaults.
   automatic aim compensation.
 - Terrain deformation is the sole source of movement height and passability. Tanks intentionally
   do not settle after later impacts below a stationary pose; that remains separate work.
+
+## Tactical Controls and Presentation
+
+- On a choosing turn, Left/Right decrease/increase azimuth, Up/Down increase/decrease elevation,
+  and `-`/`=` decrease/increase power. Each press applies one fine adjustment immediately; a held
+  eligible key repeats after 300 ms and then every 100 ms. Shift uses the existing coarse amount.
+  Opposite keys on the same axis cancel rather than selecting an arbitrary direction.
+- Keyboard panning is deliberately retired. Right-mouse drag orbits and the mouse wheel zooms;
+  neither control affects authoritative game state.
+- Camera presentation observes the current player and flight state only. A choosing turn seeks a
+  bounded behind-or-near view of the active tank based on the barrel's retained horizontal aim;
+  changing azimuth smoothly carries that view around the horizontal axis. A fired shot seeks a
+  wider bounded battlefield view. Render-time interpolation can be interrupted by newer turn or
+  flight state, and never delays input, projectile simulation, terrain deformation, or handoff.
