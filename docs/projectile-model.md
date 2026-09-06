@@ -35,8 +35,10 @@ below it, the simulation refines the crossing with 24 fixed bisection iterations
 fast projectile from tunnelling through the terrain and produces a deterministic impact position
 close to the visible surface.
 
-An impact ends flight in that simulation step and records a terrain-impact position. The
-projectile has no bounce or penetration behaviour. That same authoritative impact applies one
+An impact ends flight in that simulation step and records a terrain-impact position. The projectile
+has no bounce or penetration behaviour. A fired shot captures an immutable conventional impact
+profile before flight: its identity, radial damage values, crater values, and restrained visual
+scale do not consult later player selection or ammunition state. That profile applies one
 distance-based duel blast, creates a permanent gameplay crater, then resolves any living tanks
 whose terrain support changed before the firing turn can hand control to the other player. A shot
 that leaves the useful simulation volume without an in-bounds terrain crossing instead ends without
@@ -46,7 +48,7 @@ an impact result or crater and still completes the firing turn.
 
 The battlefield owns one mutable grid of vertex elevations. Its current triangle interpolation is
 used for rendered mesh positions, terrain-height queries, and every later swept projectile check.
-Each impact lowers current grid vertices inside the default crater radius using
+Each impact lowers current grid vertices inside the fired weapon's crater radius using
 `depth * (1 - distance² / radius²)²`; the result is deepest at the centre and reaches zero at the
 edge. Overlapping impacts subtract from the already-deformed terrain, and edge craters are clipped
 to valid grid vertices.
@@ -74,12 +76,18 @@ to boom even when it lands at the same world position.
 
 Player One begins, then Player One and Player Two alternate persistent gameplay aiming states:
 azimuth, elevation, and launch velocity. Left/Right decrease/increase azimuth by 1 degree,
-Up/Down increase/decrease elevation by 1 degree, and -/= decrease/increase launch velocity by 0.5
+Up/Down decrease/increase elevation by 1 degree, and -/= decrease/increase launch velocity by 0.5
 abstract units per second. Holding Shift makes those changes 5 degrees or 2.5 units per second. Azimuth
 wraps from 0 through less than 360 degrees; elevation clamps to 5–85 degrees; launch velocity
 clamps to 8–30 units per second.
 
-Press Space to fire the current player's state from that player's current barrel-end firing origin.
+Each player selects a conventional weapon only during a choosing turn: `1` selects unlimited Basic
+Shell and `2` selects High Explosive when a round remains. Press Space commits that weapon and
+fires the current player's state from that player's current barrel-end firing origin. Basic Shell
+uses the established 6-unit / 40-damage blast and 4-unit / 1.8-depth crater. High Explosive has
+two rounds per player and uses the same flight but an 8-unit / 60-damage blast and 6-unit /
+3-depth crater. Its final round returns the player's selection to Basic Shell.
+
 The existing shot-parameter conversion is the only azimuth/elevation/velocity-to-launch-vector
 calculation. The HUD and placeholder barrel derive from the same state. While the one projectile
 or resulting tank settling is resolving, all aiming and fire input is ignored. Terrain impact

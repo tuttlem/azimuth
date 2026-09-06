@@ -120,12 +120,29 @@ development defaults.
   contextual movement/control panels derive from authoritative state but cannot mutate it or gate
   fixed simulation.
 
+## Conventional Weapons
+
+- `WeaponId` is stable gameplay identity; display text and inventory position are not identity.
+  The central conventional weapon catalogue is the only source of ordinary weapon values.
+- Each player has an independent selected weapon and ammunition availability. `1` selects the
+  unlimited Basic Shell; `2` selects available High Explosive. Selection is valid only while a
+  player is choosing an action and never consumes ammunition.
+- Space commits exactly one available weapon to a `FiredShot`, consuming one limited round at that
+  point. The immutable shot carries its impact profile throughout flight, so later selection,
+  inventory, HUD, camera, or turn changes cannot affect its consequence.
+- Basic Shell retains the 6-unit radius / 40 maximum-damage / 4-radius, 1.8-depth crater profile.
+  High Explosive starts at two rounds per player and uses an 8-unit radius / 60 maximum-damage /
+  6-radius, 3-depth crater profile. Both use the existing gravity and wind ballistics.
+- Ordinary weapons are data-defined. Do not generalise a new behaviour until a real weapon needs
+  it: future unusual weapons may earn a narrow explicit extension, but conventional explosive
+  differences continue through the shared fired-shot and impact path.
+
 ## First Duel Damage and Victory
 
-- Every terrain impact has an authoritative 6-unit gameplay damage radius independent of the boom.
-  Its full 3D distance to each tank base determines `ceil(40 * (1 - distance / 6))` damage strictly
-  inside the radius; the edge and exterior deal zero damage. Both tanks start at 100 health, and
-  the firing tank is not immune.
+- Every terrain impact uses its fired weapon's authoritative gameplay damage radius independent of
+  the boom. Basic Shell uses `ceil(40 * (1 - distance / 6))`; High Explosive uses
+  `ceil(60 * (1 - distance / 8))`. Damage is strictly inside the relevant radius, while its edge
+  and exterior deal zero damage. Both tanks start at 100 health, and the firing tank is not immune.
 - Damage for both tanks is calculated from the same impact before either health changes. Zero health
   eliminates a tank. One survivor wins; no survivors draw. Damage, crater, living-tank settling,
   survivor selection, and match result settle before any turn handoff or presentation timing.

@@ -158,7 +158,7 @@ The objective is understandable, reproducible, tuneable behaviour rather than ma
 * [x] Support configurable launch velocity.
 * [ ] Support configurable projectile mass where gameplay requires it.
 * [ ] Support configurable projectile drag characteristics.
-* [ ] Support weapon-specific projectile behaviour without premature abstraction.
+* [x] Support weapon-specific projectile behaviour without premature abstraction.
 * [x] Allow projectiles to expose enough information for rendering/debugging.
 
 ## Trajectory Debugging
@@ -426,7 +426,7 @@ Aiming is the player's primary interaction with the physics system.
 * [x] Adjust azimuth.
 * [x] Adjust elevation.
 * [x] Adjust firing power / launch velocity.
-* [ ] Select weapon.
+* [x] Select weapon.
 * [x] Fire.
 * [x] Clearly present current aiming values.
 * [x] Provide sufficiently fine aiming control.
@@ -439,7 +439,7 @@ Aiming is the player's primary interaction with the physics system.
 * [x] Display azimuth.
 * [x] Display elevation.
 * [x] Display power.
-* [ ] Display selected weapon.
+* [x] Display selected weapon.
 * [x] Display relevant wind information.
 * [ ] Display gravity/environment information.
 * [ ] Display atmospheric information where applicable.
@@ -532,8 +532,8 @@ Every weapon should create a meaningful gameplay difference.
 
 ## Initial Weapons
 
-* [ ] Basic explosive shell.
-* [ ] High-explosive shell.
+* [x] Basic explosive shell.
+* [x] High-explosive shell.
 * [ ] Large-radius explosive.
 * [ ] Small precise projectile.
 * [ ] Heavy projectile with reduced wind sensitivity.
@@ -603,7 +603,7 @@ Explosions should be satisfying visually and mechanically.
 * [x] Terrain deformation.
 * [ ] Force/impulse effects if useful.
 * [ ] Chain reactions if introduced later.
-* [ ] Weapon-specific explosion profiles.
+* [x] Weapon-specific explosion profiles.
 
 ## Presentation
 
@@ -730,7 +730,7 @@ Local multiplayer should be the simplest path to the first complete game.
 * [x] Support multiple local players.
 * [x] Clearly identify current player.
 * [x] Maintain independent player state.
-* [ ] Maintain weapon inventories independently.
+* [x] Maintain weapon inventories independently.
 * [x] Support multiple players on one machine.
 * [x] Ensure hidden information is not required for the basic game.
 
@@ -841,7 +841,7 @@ non-conflicting panning control remain separate work.
 ## Aiming HUD
 
 * [x] Current player.
-* [ ] Weapon.
+* [x] Weapon.
 * [x] Azimuth.
 * [x] Elevation.
 * [x] Power.
@@ -858,7 +858,7 @@ non-conflicting panning control remain separate work.
 * [ ] Turn order.
 * [x] Current turn/action state.
 * [ ] Environmental summary.
-* [ ] Weapon inventory.
+* [x] Weapon inventory.
 
 ## Usability
 

@@ -12,6 +12,7 @@ pub struct Crater {
 }
 
 impl Crater {
+    #[cfg(test)]
     pub fn default_development() -> Self {
         Self::new(4.0, 1.8).expect("development crater must be valid")
     }

@@ -24,6 +24,12 @@ Each match selects one gentle random visible wind condition at startup; it then 
 so longer shots drift farther while tanks and terrain remain wind-free. Azimuth still has no audio
 content or networking.
 
+Each player begins with an unlimited **Basic Shell** and two **High Explosive** rounds. Basic Shell
+preserves the original 6-unit, 40-damage, 4-by-1.8 crater result. HE uses the same deterministic
+ballistic flight but spends one round to produce an 8-unit, 60-damage, 6-by-3 crater and a larger
+presentation boom. Weapon selection and ammunition are independent for each player; a fired shot
+captures its weapon profile before flight, so later HUD/selection changes cannot alter it.
+
 ## Prerequisites
 
 Use the current stable Rust toolchain. `rust-toolchain.toml` records this policy and requests the
@@ -86,6 +92,9 @@ The camera presents the current turn and fired shots without owning gameplay tim
   wraps through 0–359 degrees; elevation is limited to 5–85 degrees; power is launch velocity
   limited to 8–30 abstract units per second. Each player retains their own settings across the
   other player's turn. WASD and the arrows do not pan the camera.
+- On a choosing turn, press `1` for Basic Shell or `2` for High Explosive. Selecting does not
+  spend ammunition; Space commits the selected available weapon and spends one HE round only when
+  the shot begins. After a player's final HE round, their selection safely returns to Basic Shell.
 - The graphical tactical HUD keeps wind strength beside an ASCII-safe world-axis plot: `+X` is
   right and `+Z` is up. Its marker points toward the direction the wind pushes a projectile. It is
   intentionally world-relative rather than camera-relative.
@@ -110,9 +119,9 @@ The camera presents the current turn and fired shots without owning gameplay tim
 
 The HUD is a compact, read-only corner frame: the upper left shows the active player, current
 action, and both players' colour-coded health bars; the upper right shows exact azimuth,
-elevation, power, wind strength, and the world-axis wind plot. The lower left only shows movement
-allowance and the controls relevant to the current phase. It never delays a projectile, settling,
-turn handoff, or camera transition.
+elevation, power, selected weapon/ammunition, wind strength, and the world-axis wind plot. The
+lower left only shows movement allowance and the controls relevant to the current phase. It never
+delays a projectile, settling, turn handoff, or camera transition.
 
 World-space and shot-angle conventions are documented in
 [docs/world-conventions.md](docs/world-conventions.md). The fixed-step ballistic model and its

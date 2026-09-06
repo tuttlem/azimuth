@@ -4,13 +4,14 @@ mod combat;
 mod projectile;
 mod tank;
 mod turn;
+mod weapon;
 mod world;
 
 use std::f32::consts::FRAC_PI_2;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aiming::{AimAdjustment, AimingState};
-use battlefield::{BattlefieldTerrain, Crater, HALF_EXTENT, terrain_mesh_indices};
+use battlefield::{BattlefieldTerrain, HALF_EXTENT, terrain_mesh_indices};
 use bevy::{
     asset::RenderAssetUsages,
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
@@ -28,6 +29,7 @@ use tank::{
     TankFiringRepresentation, initial_tanks,
 };
 use turn::{MatchState, TurnPhase, TurnState};
+use weapon::{FiredShot, PlayerWeaponLoadouts, WeaponAvailability, WeaponId, weapon_definition};
 use world::{WorldPosition, WorldVector};
 
 const CAMERA_MIN_DISTANCE: f32 = 8.0;
@@ -108,10 +110,25 @@ struct CurrentTurn(TurnState);
 struct BattlefieldState(BattlefieldTerrain);
 
 #[derive(Resource, Default)]
-struct ProjectileFlight(Option<Projectile>);
+struct ProjectileFlight(Option<FiredShot>);
 
 #[derive(Resource, Default)]
-struct LatestTerrainImpact(Option<TerrainImpact>);
+struct WeaponState(PlayerWeaponLoadouts);
+
+#[derive(Resource)]
+struct LatestTerrainImpact {
+    impact: Option<TerrainImpact>,
+    explosion_visual_scale: f32,
+}
+
+impl Default for LatestTerrainImpact {
+    fn default() -> Self {
+        Self {
+            impact: None,
+            explosion_visual_scale: 1.0,
+        }
+    }
+}
 
 /// Records whether the persistent latest impact has already created its one presentation effect.
 /// The impact remains available for the diagnostic marker until the next shot clears it.
@@ -159,6 +176,7 @@ struct BattlefieldVisual;
 #[derive(Component)]
 struct ExplosionVisual {
     elapsed_seconds: f32,
+    scale_multiplier: f32,
 }
 
 #[derive(Component)]
@@ -197,6 +215,7 @@ enum HudTextField {
     PlayerOneHealth,
     PlayerTwoHealth,
     Aim,
+    Weapon,
     Wind,
     Movement,
     Controls,
@@ -219,6 +238,7 @@ struct TacticalHudView {
     player_one_eliminated: bool,
     player_two_eliminated: bool,
     aim: Option<AimingState>,
+    weapon: Option<(WeaponId, WeaponAvailability)>,
     wind: Wind,
     movement: Option<(u8, Option<MovementRejection>)>,
     result: MatchState,
@@ -284,6 +304,7 @@ fn main() {
         .insert_resource(CurrentTurn(turn))
         .insert_resource(BattlefieldState(terrain))
         .insert_resource(ProjectileFlight::default())
+        .insert_resource(WeaponState::default())
         .insert_resource(LatestTerrainImpact::default())
         .insert_resource(CurrentImpactExplosionConsumed::default())
         .insert_resource(MovementFeedback::default())
@@ -298,6 +319,7 @@ fn main() {
             Update,
             (
                 update_battlefield_camera,
+                select_weapon_input,
                 select_movement_action,
                 update_aiming_input,
                 update_movement_input,
@@ -393,35 +415,76 @@ fn spawn_battlefield_scene(
     });
 }
 
+// This direct Bevy system deliberately keeps the one atomic launch boundary visible; a custom
+// SystemParam would add indirection without reducing its gameplay responsibilities.
+#[allow(clippy::too_many_arguments)]
 fn launch_aimed_projectile(
     keyboard: Res<ButtonInput<KeyCode>>,
     tanks: Res<Tanks>,
     assets: Res<ProjectileVisualAssets>,
     mut flight: ResMut<ProjectileFlight>,
     mut latest_impact: ResMut<LatestTerrainImpact>,
+    mut weapons: ResMut<WeaponState>,
     mut turn: ResMut<CurrentTurn>,
     mut commands: Commands,
 ) {
-    if !keyboard.just_pressed(KeyCode::Space) || flight.0.is_some() {
+    if !keyboard.just_pressed(KeyCode::Space)
+        || flight.0.is_some()
+        || turn.0.match_state != MatchState::InProgress
+        || turn.0.phase != TurnPhase::Choosing
+    {
         return;
     }
 
-    let Some((player, aiming)) = turn.0.begin_fire() else {
+    let player = turn.0.current_player;
+    let Some(definition) = weapons.0.for_player_mut(player).commit_selected() else {
         return;
+    };
+    let Some((player, aiming)) = turn.0.begin_fire() else {
+        unreachable!("choosing player with a committed weapon must begin fire");
     };
     let tank = tank_for_player(tanks.0, player);
     let parameters = launch_parameters_for_aim(tank, aiming);
     let projectile = Projectile::launch(parameters);
+    let shot = FiredShot::new(definition, projectile);
 
     commands.spawn((
         Name::new("Aimed projectile"),
         ProjectileVisual,
         Mesh3d(assets.mesh.clone()),
         MeshMaterial3d(assets.material.clone()),
-        Transform::from_translation(to_bevy_position(projectile.position)),
+        Transform::from_translation(to_bevy_position(shot.projectile.position)),
     ));
-    flight.0 = Some(projectile);
-    latest_impact.0 = None;
+    flight.0 = Some(shot);
+    latest_impact.impact = None;
+    latest_impact.explosion_visual_scale = 1.0;
+}
+
+fn select_weapon_input(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    flight: Res<ProjectileFlight>,
+    turn: Res<CurrentTurn>,
+    mut weapons: ResMut<WeaponState>,
+) {
+    if flight.0.is_some()
+        || turn.0.match_state != MatchState::InProgress
+        || turn.0.phase != TurnPhase::Choosing
+    {
+        return;
+    }
+    let weapon = if keyboard.just_pressed(KeyCode::Digit1) {
+        Some(WeaponId::BasicShell)
+    } else if keyboard.just_pressed(KeyCode::Digit2) {
+        Some(WeaponId::HighExplosive)
+    } else {
+        None
+    };
+    if let Some(weapon) = weapon {
+        weapons
+            .0
+            .for_player_mut(turn.0.current_player)
+            .select(weapon);
+    }
 }
 
 fn select_movement_action(
@@ -754,6 +817,7 @@ fn spawn_tactical_hud(commands: &mut Commands) {
             ))
             .with_children(|p| {
                 hud_text(p, HudTextField::Aim, 17.0);
+                hud_text(p, HudTextField::Weapon, 16.0);
                 hud_text(p, HudTextField::Wind, 16.0);
                 p.spawn((
                     BackgroundColor(Color::srgba(0.08, 0.12, 0.16, 0.9)),
@@ -874,6 +938,7 @@ fn health_bar(parent: &mut ChildSpawnerCommands, player: PlayerId) {
 fn tactical_hud_view(
     turn: TurnState,
     tanks: [Tank; 2],
+    weapons: PlayerWeaponLoadouts,
     wind: Wind,
     feedback: Option<MovementRejection>,
 ) -> TacticalHudView {
@@ -895,6 +960,10 @@ fn tactical_hud_view(
         player_one_eliminated: tanks[0].is_eliminated(),
         player_two_eliminated: tanks[1].is_eliminated(),
         aim: (turn.match_state == MatchState::InProgress).then_some(turn.current_aim()),
+        weapon: (turn.match_state == MatchState::InProgress).then(|| {
+            let loadout = weapons.for_player(turn.current_player);
+            (loadout.selected(), loadout.availability(loadout.selected()))
+        }),
         wind,
         movement: turn.remaining_movement().map(|steps| (steps, feedback)),
         result: turn.match_state,
@@ -902,16 +971,19 @@ fn tactical_hud_view(
 }
 
 /// Presentation observes state only; no HUD path mutates gameplay or gates fixed simulation.
+// The grouped reads are intentionally explicit so every HUD source remains visibly read-only.
+#[allow(clippy::too_many_arguments)]
 fn sync_tactical_hud(
     turn: Res<CurrentTurn>,
     tanks: Res<Tanks>,
+    weapons: Res<WeaponState>,
     wind: Res<BattlefieldWind>,
     feedback: Res<MovementFeedback>,
     mut text: Query<(&HudText, &mut Text)>,
     mut fills: Query<(&HudHealthFill, &mut Node)>,
     mut decorations: HudDecorations,
 ) {
-    let view = tactical_hud_view(turn.0, tanks.0, wind.0, feedback.0);
+    let view = tactical_hud_view(turn.0, tanks.0, weapons.0, wind.0, feedback.0);
     for (field, mut value) in &mut text {
         value.0 = hud_field_text(field.0, view);
     }
@@ -991,6 +1063,17 @@ fn hud_field_text(field: HudTextField, view: TacticalHudView) -> String {
                 )
             },
         ),
+        HudTextField::Weapon => view.weapon.map_or_else(
+            || "WEAPON LOCKED".into(),
+            |(weapon, availability)| match availability {
+                WeaponAvailability::Unlimited => {
+                    format!("{}: UNLIMITED", weapon_definition(weapon).display_name)
+                }
+                WeaponAvailability::Remaining(rounds) => {
+                    format!("{}: x{rounds}", weapon_definition(weapon).display_name)
+                }
+            },
+        ),
         HudTextField::Wind => {
             let a = view.wind.horizontal_acceleration();
             format!(
@@ -1011,7 +1094,9 @@ fn hud_field_text(field: HudTextField, view: TacticalHudView) -> String {
             )
         }),
         HudTextField::Controls => match view.action {
-            HudAction::Choose => "M MOVE | SPACE FIRE\nARROWS AIM | -/= POWER".into(),
+            HudAction::Choose => {
+                "1 BASIC | 2 HE | M MOVE | SPACE FIRE\nARROWS AIM | -/= POWER".into()
+            }
             HudAction::Moving => "ARROWS MOVE (CAMERA) | ENTER END".into(),
             HudAction::Resolving | HudAction::Finished => String::new(),
         },
@@ -1080,40 +1165,41 @@ fn advance_projectile(
     mut latest_impact: ResMut<LatestTerrainImpact>,
     mut turn: ResMut<CurrentTurn>,
 ) {
-    let Some(mut projectile) = flight.0 else {
+    let Some(mut shot) = flight.0 else {
         return;
     };
 
-    let advance = projectile.advance_with_terrain(
+    let advance = shot.projectile.advance_with_terrain(
         gravity.0,
         wind.0,
         SimulationLimits::DEVELOPMENT,
         |x, z| terrain.0.height_if_within_bounds(x, z),
     );
     flight.0 = resolve_projectile_advance(
-        projectile,
+        shot,
         advance,
         &mut terrain.0,
         &mut tanks.0,
-        &mut latest_impact.0,
+        &mut latest_impact,
         &mut turn.0,
     );
 }
 
 fn resolve_projectile_advance(
-    projectile: Projectile,
+    shot: FiredShot,
     advance: ProjectileAdvance,
     terrain: &mut BattlefieldTerrain,
     tanks: &mut [Tank; 2],
-    latest_impact: &mut Option<TerrainImpact>,
+    latest_impact: &mut LatestTerrainImpact,
     turn: &mut TurnState,
-) -> Option<Projectile> {
+) -> Option<FiredShot> {
     match advance {
-        ProjectileAdvance::Active => Some(projectile),
+        ProjectileAdvance::Active => Some(shot),
         ProjectileAdvance::TerrainImpact(impact) => {
-            resolve_explosion(tanks, impact.position);
-            terrain.apply_crater(impact.position, Crater::default_development());
-            *latest_impact = Some(impact);
+            resolve_explosion(tanks, impact.position, shot.impact);
+            terrain.apply_crater(impact.position, shot.impact.crater);
+            latest_impact.impact = Some(impact);
+            latest_impact.explosion_visual_scale = shot.impact.explosion_visual_scale;
             reconcile_living_tank_support(tanks, terrain);
             complete_resolution_if_settled(tanks, turn);
             None
@@ -1195,9 +1281,9 @@ fn sync_projectile_visual(
     mut commands: Commands,
     mut visuals: Query<(Entity, &mut Transform), With<ProjectileVisual>>,
 ) {
-    if let Some(projectile) = flight.0 {
+    if let Some(shot) = flight.0 {
         for (_, mut transform) in &mut visuals {
-            transform.translation = to_bevy_position(projectile.position);
+            transform.translation = to_bevy_position(shot.projectile.position);
         }
     } else {
         for (entity, _) in &mut visuals {
@@ -1212,7 +1298,7 @@ fn sync_impact_marker(
     mut commands: Commands,
     mut markers: Query<(Entity, &mut Transform), With<ImpactMarker>>,
 ) {
-    if let Some(impact) = latest_impact.0 {
+    if let Some(impact) = latest_impact.impact {
         if let Some((_, mut transform)) = markers.iter_mut().next() {
             transform.translation = to_bevy_position(impact.position);
         } else {
@@ -1237,7 +1323,7 @@ fn sync_terrain_impact_explosion(
     mut consumed: ResMut<CurrentImpactExplosionConsumed>,
     mut commands: Commands,
 ) {
-    let Some(impact) = latest_impact.0 else {
+    let Some(impact) = latest_impact.impact else {
         consumed.0 = false;
         return;
     };
@@ -1250,6 +1336,7 @@ fn sync_terrain_impact_explosion(
         Name::new("Terrain impact explosion"),
         ExplosionVisual {
             elapsed_seconds: 0.0,
+            scale_multiplier: latest_impact.explosion_visual_scale,
         },
         Mesh3d(assets.mesh.clone()),
         MeshMaterial3d(assets.material.clone()),
@@ -1268,9 +1355,10 @@ fn update_explosion_visuals(
         if explosion_has_expired(explosion.elapsed_seconds) {
             commands.entity(entity).despawn();
         } else {
-            transform.scale = Vec3::splat(explosion_scale(explosion_progress(
-                explosion.elapsed_seconds,
-            )));
+            transform.scale = Vec3::splat(
+                explosion.scale_multiplier
+                    * explosion_scale(explosion_progress(explosion.elapsed_seconds)),
+            );
         }
     }
 }
@@ -1382,7 +1470,7 @@ fn update_battlefield_camera(
 ) {
     let (tanks, turn, flight) = gameplay;
     let (mut transform, mut controller) = camera.into_inner();
-    let intent = camera_presentation_intent(turn.0, flight.0);
+    let intent = camera_presentation_intent(turn.0, flight.0.map(|shot| shot.projectile));
     if controller.presentation_intent != Some(intent) {
         controller.presentation_intent = Some(intent);
         controller.desired_pose = camera_pose_for_intent(intent, tanks.0, turn.0);
@@ -1511,6 +1599,11 @@ fn create_battlefield_mesh(terrain: &BattlefieldTerrain) -> Mesh {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::battlefield::Crater;
+
+    fn basic_fired_shot(projectile: Projectile) -> FiredShot {
+        FiredShot::new(weapon_definition(WeaponId::BasicShell), projectile)
+    }
 
     #[test]
     fn explosion_lifetime_progress_and_scale_are_explicit_and_bounded() {
@@ -1701,7 +1794,8 @@ mod tests {
         })
         .unwrap();
         let choosing = initial_turn_state(tanks);
-        let choosing_view = tactical_hud_view(choosing, tanks, wind, None);
+        let choosing_view =
+            tactical_hud_view(choosing, tanks, PlayerWeaponLoadouts::default(), wind, None);
         assert_eq!(choosing_view.active_player, Some(PlayerId::One));
         assert_eq!(choosing_view.action, HudAction::Choose);
         assert_eq!(choosing_view.player_one_health, MAX_HEALTH);
@@ -1711,7 +1805,13 @@ mod tests {
 
         let mut moving = choosing;
         assert!(moving.begin_movement());
-        let moving_view = tactical_hud_view(moving, tanks, wind, Some(MovementRejection::Slope));
+        let moving_view = tactical_hud_view(
+            moving,
+            tanks,
+            PlayerWeaponLoadouts::default(),
+            wind,
+            Some(MovementRejection::Slope),
+        );
         assert_eq!(moving_view.action, HudAction::Moving);
         assert_eq!(
             moving_view.movement,
@@ -1723,9 +1823,112 @@ mod tests {
 
         let mut resolving = choosing;
         assert!(resolving.begin_fire().is_some());
-        let resolving_view = tactical_hud_view(resolving, tanks, wind, None);
+        let resolving_view = tactical_hud_view(
+            resolving,
+            tanks,
+            PlayerWeaponLoadouts::default(),
+            wind,
+            None,
+        );
         assert_eq!(resolving_view.action, HudAction::Resolving);
         assert_eq!(resolving_view.aim, Some(resolving.current_aim()));
+    }
+
+    #[test]
+    fn hud_shows_the_active_players_selected_weapon_and_truthful_ammunition() {
+        let terrain = BattlefieldTerrain::initial();
+        let tanks = initial_tanks(&terrain);
+        let wind = Wind::new(WorldVector::ZERO).unwrap();
+        let turn = initial_turn_state(tanks);
+        let mut weapons = PlayerWeaponLoadouts::default();
+
+        assert!(
+            weapons
+                .for_player_mut(PlayerId::One)
+                .select(WeaponId::HighExplosive)
+        );
+        let view = tactical_hud_view(turn, tanks, weapons, wind, None);
+
+        assert_eq!(
+            view.weapon,
+            Some((WeaponId::HighExplosive, WeaponAvailability::Remaining(2)))
+        );
+        assert_eq!(
+            hud_field_text(HudTextField::Weapon, view),
+            "HIGH EXPLOSIVE: x2"
+        );
+        assert_eq!(
+            hud_field_text(HudTextField::Controls, view),
+            "1 BASIC | 2 HE | M MOVE | SPACE FIRE\nARROWS AIM | -/= POWER"
+        );
+    }
+
+    #[test]
+    fn high_explosive_uses_the_common_resolver_with_larger_damage_and_crater_profiles() {
+        let impact_position = WorldPosition {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        };
+        let projectile =
+            Projectile::launch(AimingState::new(0.0, 45.0, 18.0).shot_parameters(impact_position));
+
+        let mut basic_terrain = BattlefieldTerrain::initial();
+        let mut basic_tanks = initial_tanks(&basic_terrain);
+        basic_tanks[0].pose.position = impact_position;
+        let mut basic_turn = initial_turn_state(basic_tanks);
+        let mut basic_latest_impact = LatestTerrainImpact::default();
+        assert!(basic_turn.begin_fire().is_some());
+        resolve_projectile_advance(
+            basic_fired_shot(projectile),
+            ProjectileAdvance::TerrainImpact(TerrainImpact {
+                position: impact_position,
+            }),
+            &mut basic_terrain,
+            &mut basic_tanks,
+            &mut basic_latest_impact,
+            &mut basic_turn,
+        );
+
+        let mut he_terrain = BattlefieldTerrain::initial();
+        let mut he_tanks = initial_tanks(&he_terrain);
+        he_tanks[0].pose.position = impact_position;
+        let mut he_turn = initial_turn_state(he_tanks);
+        let mut he_latest_impact = LatestTerrainImpact::default();
+        assert!(he_turn.begin_fire().is_some());
+        resolve_projectile_advance(
+            FiredShot::new(weapon_definition(WeaponId::HighExplosive), projectile),
+            ProjectileAdvance::TerrainImpact(TerrainImpact {
+                position: impact_position,
+            }),
+            &mut he_terrain,
+            &mut he_tanks,
+            &mut he_latest_impact,
+            &mut he_turn,
+        );
+
+        assert!(he_tanks[0].health < basic_tanks[0].health);
+        assert!(he_terrain.height(0.0, 0.0) < basic_terrain.height(0.0, 0.0));
+        assert_eq!(he_latest_impact.explosion_visual_scale, 1.5);
+        assert!(he_tanks[0].is_settling());
+
+        let mut third_terrain = BattlefieldTerrain::initial();
+        let mut third_tanks = initial_tanks(&third_terrain);
+        let mut third_turn = initial_turn_state(third_tanks);
+        let mut third_latest_impact = LatestTerrainImpact::default();
+        assert!(third_turn.begin_fire().is_some());
+        resolve_projectile_advance(
+            FiredShot::new(weapon::test_conventional_definition(), projectile),
+            ProjectileAdvance::TerrainImpact(TerrainImpact {
+                position: impact_position,
+            }),
+            &mut third_terrain,
+            &mut third_tanks,
+            &mut third_latest_impact,
+            &mut third_turn,
+        );
+        assert!(third_terrain.height(0.0, 0.0) < BattlefieldTerrain::initial().height(0.0, 0.0));
+        assert_eq!(third_latest_impact.explosion_visual_scale, 0.8);
     }
 
     #[test]
@@ -1768,12 +1971,24 @@ mod tests {
         let terrain = BattlefieldTerrain::initial();
         let tanks = initial_tanks(&terrain);
         let wind = Wind::new(WorldVector::ZERO).unwrap();
-        let choosing = tactical_hud_view(initial_turn_state(tanks), tanks, wind, None);
+        let choosing = tactical_hud_view(
+            initial_turn_state(tanks),
+            tanks,
+            PlayerWeaponLoadouts::default(),
+            wind,
+            None,
+        );
         assert!(hud_field_text(HudTextField::Controls, choosing).contains("M MOVE"));
 
         let mut resolving_turn = initial_turn_state(tanks);
         assert!(resolving_turn.begin_fire().is_some());
-        let resolving = tactical_hud_view(resolving_turn, tanks, wind, None);
+        let resolving = tactical_hud_view(
+            resolving_turn,
+            tanks,
+            PlayerWeaponLoadouts::default(),
+            wind,
+            None,
+        );
         assert!(hud_field_text(HudTextField::Controls, resolving).is_empty());
     }
 
@@ -1942,7 +2157,7 @@ mod tests {
     fn projectile_resolution_keeps_active_turn_then_applies_crater_before_handoff() {
         let mut terrain = BattlefieldTerrain::initial();
         let mut tanks = initial_tanks(&terrain);
-        let mut impact = None;
+        let mut impact = LatestTerrainImpact::default();
         let mut turn = TurnState::new(
             AimingState::new(0.0, 45.0, 18.0),
             AimingState::new(180.0, 45.0, 18.0),
@@ -1957,7 +2172,7 @@ mod tests {
 
         turn.begin_fire();
         let active = resolve_projectile_advance(
-            projectile,
+            basic_fired_shot(projectile),
             ProjectileAdvance::Active,
             &mut terrain,
             &mut tanks,
@@ -1970,7 +2185,7 @@ mod tests {
 
         let before = terrain.height(0.0, 0.0);
         let resolved = resolve_projectile_advance(
-            projectile,
+            basic_fired_shot(projectile),
             ProjectileAdvance::TerrainImpact(TerrainImpact {
                 position: WorldPosition {
                     x: 0.0,
@@ -1984,7 +2199,7 @@ mod tests {
             &mut turn,
         );
         assert!(resolved.is_none());
-        assert_eq!(impact.unwrap().position.y, before);
+        assert_eq!(impact.impact.unwrap().position.y, before);
         assert!(terrain.height(0.0, 0.0) < before);
         assert_eq!(turn.current_player, PlayerId::Two);
         assert_eq!(turn.phase, TurnPhase::Choosing);
@@ -1994,7 +2209,7 @@ mod tests {
     fn wind_derived_terrain_impact_uses_the_existing_damage_crater_and_handoff_pipeline() {
         let mut terrain = BattlefieldTerrain::initial();
         let mut tanks = initial_tanks(&terrain);
-        let mut latest_impact = None;
+        let mut latest_impact = LatestTerrainImpact::default();
         let mut turn = initial_turn_state(tanks);
         let wind = Wind::new(WorldVector {
             x: 1.5,
@@ -2031,7 +2246,7 @@ mod tests {
         assert!(turn.begin_fire().is_some());
         assert!(
             resolve_projectile_advance(
-                projectile,
+                basic_fired_shot(projectile),
                 ProjectileAdvance::TerrainImpact(impact),
                 &mut terrain,
                 &mut tanks,
@@ -2041,7 +2256,7 @@ mod tests {
             .is_none()
         );
 
-        assert_eq!(latest_impact, Some(impact));
+        assert_eq!(latest_impact.impact, Some(impact));
         assert!(terrain.height(impact.position.x, impact.position.z) < before_height);
         assert!(
             tanks
@@ -2057,7 +2272,7 @@ mod tests {
     fn crater_beneath_a_living_tank_defers_handoff_until_it_settles() {
         let mut terrain = BattlefieldTerrain::initial();
         let mut tanks = initial_tanks(&terrain);
-        let mut impact = None;
+        let mut impact = LatestTerrainImpact::default();
         let mut turn = initial_turn_state(tanks);
         let projectile = Projectile::launch(AimingState::new(0.0, 45.0, 18.0).shot_parameters(
             WorldPosition {
@@ -2071,7 +2286,7 @@ mod tests {
         assert!(turn.begin_fire().is_some());
         assert!(
             resolve_projectile_advance(
-                projectile,
+                basic_fired_shot(projectile),
                 ProjectileAdvance::TerrainImpact(TerrainImpact { position: centre }),
                 &mut terrain,
                 &mut tanks,
@@ -2108,7 +2323,7 @@ mod tests {
     fn zero_gravity_settling_keeps_the_resolving_turn_locked() {
         let mut terrain = BattlefieldTerrain::initial();
         let mut tanks = initial_tanks(&terrain);
-        let mut impact = None;
+        let mut impact = LatestTerrainImpact::default();
         let mut turn = initial_turn_state(tanks);
         let projectile = Projectile::launch(AimingState::new(0.0, 45.0, 18.0).shot_parameters(
             WorldPosition {
@@ -2121,7 +2336,7 @@ mod tests {
 
         assert!(turn.begin_fire().is_some());
         resolve_projectile_advance(
-            projectile,
+            basic_fired_shot(projectile),
             ProjectileAdvance::TerrainImpact(TerrainImpact { position: centre }),
             &mut terrain,
             &mut tanks,
@@ -2174,7 +2389,7 @@ mod tests {
         let mut terrain = BattlefieldTerrain::initial();
         let mut tanks = initial_tanks(&terrain);
         let before = terrain.height(0.0, 0.0);
-        let mut impact = None;
+        let mut impact = LatestTerrainImpact::default();
         let mut turn = TurnState::new(
             AimingState::new(0.0, 45.0, 18.0),
             AimingState::new(180.0, 45.0, 18.0),
@@ -2190,7 +2405,7 @@ mod tests {
         turn.begin_fire();
         assert!(
             resolve_projectile_advance(
-                projectile,
+                basic_fired_shot(projectile),
                 ProjectileAdvance::OutOfBounds,
                 &mut terrain,
                 &mut tanks,
@@ -2199,7 +2414,7 @@ mod tests {
             )
             .is_none()
         );
-        assert!(impact.is_none());
+        assert!(impact.impact.is_none());
         assert_eq!(terrain.height(0.0, 0.0), before);
         assert_eq!(turn.current_player, PlayerId::Two);
         assert_eq!(turn.phase, TurnPhase::Choosing);
