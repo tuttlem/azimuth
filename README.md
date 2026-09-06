@@ -20,7 +20,9 @@ remains presentation only. Terrain impacts deal distance-based splash damage: bo
 removes a living tank's support makes it visibly settle under the configured gravity before the
 turn can advance; it changes the next firing origin without resetting aim and causes no fall
 damage. A tank at zero health is eliminated; the final survivor wins and mutual elimination draws.
-Azimuth still has no audio content or networking.
+Each match selects one gentle random visible wind condition at startup; it then remains constant,
+so longer shots drift farther while tanks and terrain remain wind-free. Azimuth still has no audio
+content or networking.
 
 ## Prerequisites
 
@@ -84,6 +86,9 @@ The camera presents the current turn and fired shots without owning gameplay tim
   wraps through 0–359 degrees; elevation is limited to 5–85 degrees; power is launch velocity
   limited to 8–30 abstract units per second. Each player retains their own settings across the
   other player's turn. WASD and the arrows do not pan the camera.
+- The HUD reports a barrel-relative wind direction such as `right` or `ahead`, plus the signed
+  authoritative X/Z vector and strength. It changes with the active player's aim, not the camera.
+  A graphical wind indicator is deferred until the HUD receives its planned graphical frame.
 - Press M to choose movement. I/J/K/L request one step toward negative Z/negative X/positive
   Z/positive X. A movement action starts with six steps; a valid step must stay within the
   battlefield and change terrain height by no more than 0.75 units. The display shows remaining

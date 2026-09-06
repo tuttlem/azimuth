@@ -7,6 +7,7 @@ mod turn;
 mod world;
 
 use std::f32::consts::FRAC_PI_2;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use aiming::{AimAdjustment, AimingState};
 use battlefield::{BattlefieldTerrain, Crater, HALF_EXTENT, terrain_mesh_indices};
@@ -19,7 +20,7 @@ use bevy::{
 };
 use combat::resolve_explosion;
 use projectile::{
-    Gravity, Projectile, ProjectileAdvance, SimulationLimits, TerrainImpact,
+    Gravity, Projectile, ProjectileAdvance, SimulationLimits, TerrainImpact, Wind,
     azimuth_from_horizontal_direction,
 };
 use tank::{
@@ -27,7 +28,7 @@ use tank::{
     TankFiringRepresentation, initial_tanks,
 };
 use turn::{MatchState, TurnPhase, TurnState};
-use world::WorldPosition;
+use world::{WorldPosition, WorldVector};
 
 const CAMERA_MIN_DISTANCE: f32 = 8.0;
 const CAMERA_MAX_DISTANCE: f32 = 60.0;
@@ -45,6 +46,9 @@ const AIM_REPEAT_DELAY_SECONDS: f32 = 0.3;
 const AIM_REPEAT_INTERVAL_SECONDS: f32 = 0.1;
 const PROJECTILE_FIXED_HZ: f64 = 120.0;
 const DEVELOPMENT_GRAVITY: f32 = 8.0;
+const MINIMUM_WIND_STRENGTH: f32 = 0.75;
+const MAXIMUM_WIND_STRENGTH: f32 = 1.75;
+const WIND_ENABLED: bool = true;
 const EXPLOSION_VISUAL_DURATION_SECONDS: f32 = 0.6;
 const EXPLOSION_INITIAL_SCALE: f32 = 0.35;
 const EXPLOSION_MAXIMUM_SCALE: f32 = 5.0;
@@ -116,6 +120,11 @@ struct CurrentImpactExplosionConsumed(bool);
 
 #[derive(Resource)]
 struct BattlefieldGravity(Gravity);
+
+/// Match-constant, projectile-only wind. Tank movement and settling intentionally consume no
+/// wind because this is an artillery aiming variable, not vehicle physics.
+#[derive(Resource)]
+struct BattlefieldWind(Wind);
 
 #[derive(Resource, Default)]
 struct MovementFeedback(Option<MovementRejection>);
@@ -226,6 +235,7 @@ fn main() {
         .insert_resource(BattlefieldGravity(
             Gravity::new(DEVELOPMENT_GRAVITY).expect("development gravity must be valid"),
         ))
+        .insert_resource(BattlefieldWind(select_match_wind()))
         .insert_resource(Time::<Fixed>::from_hz(PROJECTILE_FIXED_HZ))
         .add_systems(Startup, spawn_battlefield_scene)
         .add_systems(
@@ -245,7 +255,6 @@ fn main() {
                 sync_terrain_impact_explosion,
                 update_explosion_visuals,
                 sync_battlefield_mesh,
-                draw_world_axes,
             )
                 .chain(),
         )
@@ -263,6 +272,7 @@ fn spawn_battlefield_scene(
     tanks: Res<Tanks>,
     turn: Res<CurrentTurn>,
     terrain: Res<BattlefieldState>,
+    wind: Res<BattlefieldWind>,
 ) {
     let camera = BattlefieldCamera::default();
     let transform = camera_transform(&camera);
@@ -310,7 +320,7 @@ fn spawn_battlefield_scene(
 
     commands.spawn((
         AimingHud,
-        Text::new(format_aiming_hud(turn.0, tanks.0, None)),
+        Text::new(format_aiming_hud(turn.0, tanks.0, wind.0, None)),
         TextFont {
             font_size: 22.0,
             ..default()
@@ -625,15 +635,17 @@ fn sync_tank_elimination(tanks: Res<Tanks>, mut visuals: Query<(&TankVisual, &mu
 fn sync_aiming_hud(
     turn: Res<CurrentTurn>,
     tanks: Res<Tanks>,
+    wind: Res<BattlefieldWind>,
     feedback: Res<MovementFeedback>,
     mut hud: Single<&mut Text, With<AimingHud>>,
 ) {
-    hud.0 = format_aiming_hud(turn.0, tanks.0, feedback.0);
+    hud.0 = format_aiming_hud(turn.0, tanks.0, wind.0, feedback.0);
 }
 
 fn format_aiming_hud(
     turn: TurnState,
     tanks: [Tank; 2],
+    wind: Wind,
     feedback: Option<MovementRejection>,
 ) -> String {
     let health = |player| {
@@ -678,13 +690,85 @@ fn format_aiming_hud(
     let player_name = player_name(turn.current_player);
     let aiming = turn.current_aim();
     format!(
-        "{player_name}\nPlayer One health: {}\nPlayer Two health: {}\nAzimuth: {:.0}°\nElevation: {:.0}°\nPower: {:.1} units/s\n{status}",
+        "{player_name}\nPlayer One health: {}\nPlayer Two health: {}\nAzimuth: {:.0}°\nElevation: {:.0}°\nPower: {:.1} units/s\n{}\n{status}",
         health(PlayerId::One),
         health(PlayerId::Two),
         aiming.azimuth_degrees,
         aiming.elevation_degrees,
         aiming.launch_speed,
+        format_wind(wind, aiming.azimuth_degrees),
     )
+}
+
+fn format_wind(wind: Wind, azimuth_degrees: f32) -> String {
+    let acceleration = wind.horizontal_acceleration();
+    let relation = wind_relative_to_aim(wind, azimuth_degrees);
+    format!(
+        "Wind: relative {relation}; world ({:+.1} X, {:+.1} Z); {:.1} units/s^2",
+        acceleration.x,
+        acceleration.z,
+        wind.strength()
+    )
+}
+
+/// Selects one gentle, constant wind for the match. The sampled value becomes authoritative
+/// state immediately; it never changes during flight or a player's turn.
+fn select_match_wind() -> Wind {
+    if !WIND_ENABLED {
+        return Wind::new(WorldVector::ZERO).expect("calm wind must be valid");
+    }
+
+    let seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_nanos() as u64);
+    wind_from_seed(seed)
+}
+
+/// Kept pure so a recorded seed recreates the same match condition in tests or diagnostics.
+fn wind_from_seed(mut seed: u64) -> Wind {
+    let direction_fraction = next_random_fraction(&mut seed);
+    let strength_fraction = next_random_fraction(&mut seed);
+    let angle = direction_fraction * std::f32::consts::TAU;
+    let strength =
+        MINIMUM_WIND_STRENGTH + (MAXIMUM_WIND_STRENGTH - MINIMUM_WIND_STRENGTH) * strength_fraction;
+    Wind::new(WorldVector {
+        x: angle.cos() * strength,
+        y: 0.0,
+        z: angle.sin() * strength,
+    })
+    .expect("sampled match wind must be horizontal and finite")
+}
+
+fn next_random_fraction(seed: &mut u64) -> f32 {
+    *seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    ((*seed >> 40) as f32) / ((1_u32 << 24) as f32)
+}
+
+/// Gives the player a barrel-relative direction, independent of the camera or world axes.
+fn wind_relative_to_aim(wind: Wind, azimuth_degrees: f32) -> &'static str {
+    let acceleration = wind.horizontal_acceleration();
+    if wind.strength() == 0.0 {
+        return "calm";
+    }
+    let azimuth = azimuth_degrees.to_radians();
+    let forward_x = azimuth.sin();
+    let forward_z = -azimuth.cos();
+    let right_x = -forward_z;
+    let right_z = forward_x;
+    let forward = acceleration.x * forward_x + acceleration.z * forward_z;
+    let right = acceleration.x * right_x + acceleration.z * right_z;
+    let sector = (right.atan2(forward).to_degrees() / 45.0).round() as i32;
+    match sector.rem_euclid(8) {
+        0 => "ahead",
+        1 => "ahead-right",
+        2 => "right",
+        3 => "behind-right",
+        4 => "behind",
+        5 => "behind-left",
+        6 => "left",
+        7 => "ahead-left",
+        _ => unreachable!("the wind sector is normalized to eight directions"),
+    }
 }
 
 fn player_name(player: PlayerId) -> &'static str {
@@ -696,6 +780,7 @@ fn player_name(player: PlayerId) -> &'static str {
 
 fn advance_projectile(
     gravity: Res<BattlefieldGravity>,
+    wind: Res<BattlefieldWind>,
     mut terrain: ResMut<BattlefieldState>,
     mut tanks: ResMut<Tanks>,
     mut flight: ResMut<ProjectileFlight>,
@@ -706,10 +791,12 @@ fn advance_projectile(
         return;
     };
 
-    let advance =
-        projectile.advance_with_terrain(gravity.0, SimulationLimits::DEVELOPMENT, |x, z| {
-            terrain.0.height_if_within_bounds(x, z)
-        });
+    let advance = projectile.advance_with_terrain(
+        gravity.0,
+        wind.0,
+        SimulationLimits::DEVELOPMENT,
+        |x, z| terrain.0.height_if_within_bounds(x, z),
+    );
     flight.0 = resolve_projectile_advance(
         projectile,
         advance,
@@ -1128,10 +1215,6 @@ fn create_battlefield_mesh(terrain: &BattlefieldTerrain) -> Mesh {
     .with_computed_smooth_normals()
 }
 
-fn draw_world_axes(mut gizmos: Gizmos) {
-    gizmos.axes(Transform::IDENTITY, 3.0);
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1286,6 +1369,55 @@ mod tests {
             aiming::MAX_ELEVATION_DEGREES
         );
         assert_eq!(turn.aim_for(PlayerId::Two), player_two_before);
+    }
+
+    #[test]
+    fn in_progress_hud_states_show_the_ascii_player_relative_wind_readout() {
+        let terrain = BattlefieldTerrain::initial();
+        let tanks = initial_tanks(&terrain);
+        let wind = Wind::new(WorldVector {
+            x: 1.5,
+            y: 0.0,
+            z: 0.0,
+        })
+        .unwrap();
+        let choosing = initial_turn_state(tanks);
+        let wind_line = format_wind(wind, choosing.current_aim().azimuth_degrees);
+        assert!(format_aiming_hud(choosing, tanks, wind, None).contains(&wind_line));
+
+        let mut moving = choosing;
+        assert!(moving.begin_movement());
+        assert!(format_aiming_hud(moving, tanks, wind, None).contains(&wind_line));
+
+        let mut resolving = choosing;
+        assert!(resolving.begin_fire().is_some());
+        assert!(format_aiming_hud(resolving, tanks, wind, None).contains(&wind_line));
+    }
+
+    #[test]
+    fn match_wind_is_reproducible_from_a_seed_and_stays_gentle() {
+        let first = wind_from_seed(42);
+        let second = wind_from_seed(42);
+        let different = wind_from_seed(43);
+
+        assert_eq!(first, second);
+        assert_ne!(first, different);
+        assert!((MINIMUM_WIND_STRENGTH..=MAXIMUM_WIND_STRENGTH).contains(&first.strength()));
+        assert_eq!(first.horizontal_acceleration().y, 0.0);
+    }
+
+    #[test]
+    fn wind_direction_is_relative_to_the_current_barrel_aim() {
+        let toward_positive_x = Wind::new(WorldVector {
+            x: 1.0,
+            y: 0.0,
+            z: 0.0,
+        })
+        .unwrap();
+
+        assert_eq!(wind_relative_to_aim(toward_positive_x, 0.0), "right");
+        assert_eq!(wind_relative_to_aim(toward_positive_x, 90.0), "ahead");
+        assert_eq!(wind_relative_to_aim(toward_positive_x, 180.0), "left");
     }
 
     #[test]
@@ -1485,6 +1617,69 @@ mod tests {
         assert!(resolved.is_none());
         assert_eq!(impact.unwrap().position.y, before);
         assert!(terrain.height(0.0, 0.0) < before);
+        assert_eq!(turn.current_player, PlayerId::Two);
+        assert_eq!(turn.phase, TurnPhase::Choosing);
+    }
+
+    #[test]
+    fn wind_derived_terrain_impact_uses_the_existing_damage_crater_and_handoff_pipeline() {
+        let mut terrain = BattlefieldTerrain::initial();
+        let mut tanks = initial_tanks(&terrain);
+        let mut latest_impact = None;
+        let mut turn = initial_turn_state(tanks);
+        let wind = Wind::new(WorldVector {
+            x: 1.5,
+            y: 0.0,
+            z: 0.0,
+        })
+        .unwrap();
+        let mut projectile = Projectile::launch(AimingState::new(0.0, 60.0, 10.0).shot_parameters(
+            WorldPosition {
+                x: 0.0,
+                y: 15.0,
+                z: 0.0,
+            },
+        ));
+        let impact = (0..2_400)
+            .find_map(|_| {
+                match projectile.advance_with_terrain(
+                    Gravity::new(DEVELOPMENT_GRAVITY).unwrap(),
+                    wind,
+                    SimulationLimits::DEVELOPMENT,
+                    |x, z| terrain.height_if_within_bounds(x, z),
+                ) {
+                    ProjectileAdvance::Active => None,
+                    ProjectileAdvance::TerrainImpact(impact) => Some(impact),
+                    ProjectileAdvance::OutOfBounds => {
+                        panic!("development shot should impact terrain")
+                    }
+                }
+            })
+            .unwrap();
+        let before_height = terrain.height(impact.position.x, impact.position.z);
+        let health_before = tanks.map(|tank| tank.health);
+
+        assert!(turn.begin_fire().is_some());
+        assert!(
+            resolve_projectile_advance(
+                projectile,
+                ProjectileAdvance::TerrainImpact(impact),
+                &mut terrain,
+                &mut tanks,
+                &mut latest_impact,
+                &mut turn,
+            )
+            .is_none()
+        );
+
+        assert_eq!(latest_impact, Some(impact));
+        assert!(terrain.height(impact.position.x, impact.position.z) < before_height);
+        assert!(
+            tanks
+                .iter()
+                .zip(health_before)
+                .all(|(tank, health)| tank.health <= health)
+        );
         assert_eq!(turn.current_player, PlayerId::Two);
         assert_eq!(turn.phase, TurnPhase::Choosing);
     }

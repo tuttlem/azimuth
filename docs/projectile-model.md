@@ -1,23 +1,28 @@
 # First Projectile Model
 
-Azimuth's first projectile is deliberately small: a position and velocity moving under a constant,
-configurable downward gravity value. It is gameplay physics, not a model of real-world Earth.
+Azimuth's first projectile is deliberately small: a position and velocity moving under constant,
+configurable gravity and a match-constant horizontal wind acceleration. It is gameplay physics,
+not a model of real-world Earth.
 
 ## Fixed Steps
 
 Simulation advances in fixed 1/120-second steps. Rendering can run faster or slower without
 changing the sequence of simulation states for the same shot and number of steps.
 
-For each step, acceleration is `(0, -gravity, 0)`. The projectile uses the current velocity to
-update position with the constant-acceleration term, then updates velocity:
+For each step, acceleration is the sum of gravity `(0, -gravity, 0)` and wind `(wind_x, 0,
+wind_z)`. Wind means the horizontal direction it pushes a projectile **toward**. The projectile
+uses the current velocity to update position with the constant-acceleration term, then updates
+velocity:
 
 ```text
 position = position + velocity * dt + 0.5 * acceleration * dt²
 velocity = velocity + acceleration * dt
 ```
 
-This makes horizontal velocity constant when gravity is the only force and gives terrain impact a
-direct, understandable per-step boundary.
+With calm wind, this is exactly the original gravity-only motion. With wind, horizontal influence
+accumulates with airtime, so high and long shots drift more. There is no vertical wind, drag,
+mass, or atmospheric model; vertical motion remains gravity's responsibility. The swept terrain
+test uses this same wind-altered segment.
 
 ## Terrain Impact
 
@@ -68,9 +73,9 @@ to boom even when it lands at the same world position.
 ## Player Aiming and Fire
 
 Player One begins, then Player One and Player Two alternate persistent gameplay aiming states:
-azimuth, elevation, and launch velocity. Q/E decrease/increase azimuth by 1 degree, R/F
-increase/decrease elevation by 1 degree, and T/G increase/decrease launch velocity by 0.5 abstract
-units per second. Holding Shift makes those changes 5 degrees or 2.5 units per second. Azimuth
+azimuth, elevation, and launch velocity. Left/Right decrease/increase azimuth by 1 degree,
+Up/Down increase/decrease elevation by 1 degree, and -/= decrease/increase launch velocity by 0.5
+abstract units per second. Holding Shift makes those changes 5 degrees or 2.5 units per second. Azimuth
 wraps from 0 through less than 360 degrees; elevation clamps to 5–85 degrees; launch velocity
 clamps to 8–30 units per second.
 
@@ -82,15 +87,19 @@ applies its authoritative crater and completes living-tank settling before contr
 non-impact termination also changes control without an impact. Each player's selected settings
 remain available when their next turn begins, enabling bracketing.
 
-The default gravity magnitude is 8 abstract units per second squared. It is explicit rather than
-an Earth declaration; launch velocity is a direct, player-visible power value for this first model.
+The default gravity magnitude is 8 abstract units per second squared. At match start, wind is
+sampled once with a random horizontal direction and a gentle strength from 0.75 through 1.75
+units/s², then remains constant for that match. The sampled value is authoritative gameplay state;
+the selection function is seed-reproducible for testing. Launch velocity remains a direct,
+player-visible power value.
 
 ## Intentional Boundary
 
 The projectile is rendered as a simple sphere driven entirely by simulation state. It has no mass,
-drag, wind, weapon properties, gameplay explosion, damage, or terrain deformation. It stops at
-terrain impact or ends when it leaves the documented simulation volume or reaches its 20-second
-simulated lifetime. A small removable development marker shows the latest terrain-impact position;
-it does not affect simulation.
+drag, vertical wind, changing weather, weapon-specific wind response, or aim assistance. Wind
+does not push tanks, terrain, explosions, or the camera. It stops at terrain impact or ends when it
+leaves the documented simulation volume or reaches its 20-second simulated lifetime. A small
+removable development marker shows the latest terrain-impact position; it does not affect
+simulation.
 
 Shot-angle and launch-origin conventions are defined in [world-conventions.md](world-conventions.md).

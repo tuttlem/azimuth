@@ -209,19 +209,23 @@ Wind is a major source of artillery uncertainty and skill expression.
 
 ## Basic Wind
 
-* [ ] Represent wind as a 3D vector or appropriate environmental field.
-* [ ] Apply horizontal wind to projectile behaviour.
+* [x] Represent wind as a 3D vector or appropriate environmental field.
+* [x] Apply horizontal wind to projectile behaviour.
 * [ ] Determine whether vertical wind should be supported.
-* [ ] Expose wind direction clearly to the player.
-* [ ] Expose wind strength clearly to the player.
-* [ ] Support deterministic wind conditions.
-* [ ] Test wind effects on projectile trajectories.
+* [x] Expose wind direction clearly to the player.
+* [x] Expose wind strength clearly to the player.
+* [x] Support deterministic wind conditions.
+* [x] Test wind effects on projectile trajectories.
+
+Basic wind deliberately remains a random-at-match-start but constant-during-match horizontal
+projectile acceleration. Gentle shot-to-shot changes, vertical wind, environment presets, and
+final balance conclusions need later play evidence.
 
 ## Wind Gameplay
 
-* [ ] Establish wind-strength ranges that remain playable.
-* [ ] Ensure wind effects are strong enough to matter without becoming arbitrary.
-* [ ] Make crosswind compensation understandable through repeated play.
+* [x] Establish wind-strength ranges that remain playable.
+* [x] Ensure wind effects are strong enough to matter without becoming arbitrary.
+* [x] Make crosswind compensation understandable through repeated play.
 * [ ] Explore battlefield presets with characteristic wind behaviour.
 
 ## Advanced Wind — Later / Experimental
@@ -415,7 +419,7 @@ Aiming is the player's primary interaction with the physics system.
 * [x] Display elevation.
 * [x] Display power.
 * [ ] Display selected weapon.
-* [ ] Display relevant wind information.
+* [x] Display relevant wind information.
 * [ ] Display gravity/environment information.
 * [ ] Display atmospheric information where applicable.
 * [ ] Consider showing previous shot settings.
@@ -802,6 +806,17 @@ non-conflicting panning control remain separate work.
 
 # 22. User Interface / HUD
 
+## Graphical Tactical HUD
+
+* [ ] Replace the temporary text-only HUD with a compact graphical tactical frame.
+* [ ] Show the active player's name and current turn/action state.
+* [ ] Show both players' health and elimination state.
+* [ ] Show current azimuth, elevation, and firing power.
+* [ ] Show movement allowance while a movement action is active.
+* [ ] Show wind strength and a graphical world/shot-relative direction indicator.
+* [ ] Keep controls as concise contextual hints rather than the HUD's primary content.
+* [ ] Keep HUD presentation read-only so it cannot delay or alter authoritative gameplay.
+
 ## Aiming HUD
 
 * [x] Current player.
@@ -809,9 +824,10 @@ non-conflicting panning control remain separate work.
 * [x] Azimuth.
 * [x] Elevation.
 * [x] Power.
-* [ ] Wind.
+* [x] Wind.
 * [ ] Gravity.
 * [ ] Atmospheric information where relevant.
+* [ ] Add a graphical world-axis wind indicator when the HUD gains a graphical frame.
 * [x] Health.
 * [x] Movement allowance where relevant.
 
@@ -1067,7 +1083,7 @@ These are conceptual milestones rather than fixed specification sequences.
 ## Milestone F — Environment
 
 * [ ] Gravity varies by battlefield.
-* [ ] Wind affects projectiles.
+* [x] Wind affects projectiles.
 * [ ] Atmospheric drag exists.
 * [ ] Environment parameters are clearly shown to players.
 * [ ] At least three meaningfully different battlefield environments exist.

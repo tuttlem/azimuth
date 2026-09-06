@@ -100,6 +100,42 @@ impl Gravity {
     }
 }
 
+/// A constant horizontal acceleration applied to every projectile in a match.
+///
+/// This is deliberately a gameplay approximation: the vector says where wind pushes a
+/// projectile *toward*, rather than modelling air resistance or a wind velocity. Keeping Y at
+/// zero leaves vertical ballistics owned solely by [`Gravity`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Wind {
+    horizontal_acceleration: WorldVector,
+}
+
+impl Wind {
+    pub fn new(horizontal_acceleration: WorldVector) -> Result<Self, ProjectileParameterError> {
+        if !horizontal_acceleration.x.is_finite()
+            || !horizontal_acceleration.y.is_finite()
+            || !horizontal_acceleration.z.is_finite()
+            || horizontal_acceleration.y != 0.0
+        {
+            return Err(ProjectileParameterError::Wind);
+        }
+
+        Ok(Self {
+            horizontal_acceleration,
+        })
+    }
+
+    pub fn horizontal_acceleration(self) -> WorldVector {
+        self.horizontal_acceleration
+    }
+
+    pub fn strength(self) -> f32 {
+        (self.horizontal_acceleration.x * self.horizontal_acceleration.x
+            + self.horizontal_acceleration.z * self.horizontal_acceleration.z)
+            .sqrt()
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SimulationLimits {
     horizontal_extent: f32,
@@ -163,6 +199,7 @@ impl Projectile {
     pub fn advance_with_terrain<F>(
         &mut self,
         gravity: Gravity,
+        wind: Wind,
         limits: SimulationLimits,
         terrain_height: F,
     ) -> ProjectileAdvance
@@ -170,7 +207,7 @@ impl Projectile {
         F: Fn(f32, f32) -> Option<f32>,
     {
         let previous_position = self.position;
-        let acceleration = gravity.acceleration();
+        let acceleration = gravity.acceleration().added(wind.horizontal_acceleration());
         let step = FIXED_STEP_SECONDS;
         let displacement = self
             .velocity
@@ -253,6 +290,7 @@ pub enum ProjectileParameterError {
     Elevation,
     LaunchSpeed,
     Gravity,
+    Wind,
     HorizontalDirection,
 }
 
@@ -278,13 +316,17 @@ mod tests {
         None
     }
 
+    fn calm_wind() -> Wind {
+        Wind::new(WorldVector::ZERO).unwrap()
+    }
+
     fn advance_without_terrain(
         projectile: &mut Projectile,
         gravity: Gravity,
         limits: SimulationLimits,
     ) -> bool {
         matches!(
-            projectile.advance_with_terrain(gravity, limits, no_terrain),
+            projectile.advance_with_terrain(gravity, calm_wind(), limits, no_terrain),
             ProjectileAdvance::Active
         )
     }
@@ -303,6 +345,35 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+
+    #[test]
+    fn wind_is_finite_horizontal_and_exposes_its_strength() {
+        let wind = Wind::new(WorldVector {
+            x: 3.0,
+            y: 0.0,
+            z: 4.0,
+        })
+        .unwrap();
+        assert_eq!(wind.horizontal_acceleration().y, 0.0);
+        assert_close(wind.strength(), 5.0);
+        assert_eq!(calm_wind().strength(), 0.0);
+        assert_eq!(
+            Wind::new(WorldVector {
+                x: 1.0,
+                y: 0.1,
+                z: 0.0
+            }),
+            Err(ProjectileParameterError::Wind)
+        );
+        assert_eq!(
+            Wind::new(WorldVector {
+                x: f32::NAN,
+                y: 0.0,
+                z: 0.0
+            }),
+            Err(ProjectileParameterError::Wind)
+        );
     }
 
     #[test]
@@ -456,6 +527,158 @@ mod tests {
             initial_position.y + initial_velocity.y - 0.5 * 8.0,
         );
         assert_close(projectile.velocity.y, initial_velocity.y - 8.0);
+    }
+
+    #[test]
+    fn zero_wind_preserves_the_gravity_only_trajectory() {
+        let gravity = Gravity::new(8.0).unwrap();
+        let mut calm = launch(0.0, 45.0, 10.0);
+        let mut explicit_zero = calm;
+
+        for _ in 0..120 {
+            assert!(advance_without_terrain(
+                &mut calm,
+                gravity,
+                SimulationLimits::DEVELOPMENT
+            ));
+            assert!(matches!(
+                explicit_zero.advance_with_terrain(
+                    gravity,
+                    Wind::new(WorldVector::ZERO).unwrap(),
+                    SimulationLimits::DEVELOPMENT,
+                    no_terrain,
+                ),
+                ProjectileAdvance::Active
+            ));
+        }
+
+        assert_eq!(calm, explicit_zero);
+    }
+
+    #[test]
+    fn wind_accumulates_horizontal_displacement_without_vertical_acceleration() {
+        let gravity = Gravity::new(8.0).unwrap();
+        let wind = Wind::new(WorldVector {
+            x: 1.5,
+            y: 0.0,
+            z: 0.0,
+        })
+        .unwrap();
+        let mut projectile = launch(0.0, 45.0, 10.0);
+        let initial = projectile;
+
+        for _ in 0..120 {
+            assert!(matches!(
+                projectile.advance_with_terrain(
+                    gravity,
+                    wind,
+                    SimulationLimits::DEVELOPMENT,
+                    no_terrain
+                ),
+                ProjectileAdvance::Active
+            ));
+        }
+
+        assert_close(projectile.position.x, initial.position.x + 0.75);
+        assert_close(projectile.velocity.x, initial.velocity.x + 1.5);
+        assert_close(
+            projectile.position.y,
+            initial.position.y + initial.velocity.y - 4.0,
+        );
+        assert_close(projectile.velocity.y, initial.velocity.y - 8.0);
+    }
+
+    #[test]
+    fn reverse_stronger_and_longer_wind_exposure_change_horizontal_results_predictably() {
+        let gravity = Gravity::new(0.0).unwrap();
+        let toward_x = Wind::new(WorldVector {
+            x: 1.5,
+            y: 0.0,
+            z: 0.0,
+        })
+        .unwrap();
+        let away_x = Wind::new(WorldVector {
+            x: -1.5,
+            y: 0.0,
+            z: 0.0,
+        })
+        .unwrap();
+        let stronger = Wind::new(WorldVector {
+            x: 3.0,
+            y: 0.0,
+            z: 0.0,
+        })
+        .unwrap();
+        let mut positive = launch(0.0, 60.0, 10.0);
+        let mut negative = positive;
+        let mut strong = positive;
+        let mut short = positive;
+
+        for _ in 0..240 {
+            for (projectile, wind) in [
+                (&mut positive, toward_x),
+                (&mut negative, away_x),
+                (&mut strong, stronger),
+            ] {
+                assert!(matches!(
+                    projectile.advance_with_terrain(gravity, wind, generous_limits(), no_terrain),
+                    ProjectileAdvance::Active
+                ));
+            }
+            if short.elapsed_steps == 119 {
+                break;
+            }
+            assert!(matches!(
+                short.advance_with_terrain(gravity, toward_x, generous_limits(), no_terrain),
+                ProjectileAdvance::Active
+            ));
+        }
+
+        assert!(positive.position.x > 0.0 && negative.position.x < 0.0);
+        assert!(strong.position.x > positive.position.x);
+        assert!(positive.position.x > short.position.x);
+    }
+
+    #[test]
+    fn crosswind_and_parallel_wind_change_the_expected_horizontal_axis() {
+        let gravity = Gravity::new(0.0).unwrap();
+        let crosswind = Wind::new(WorldVector {
+            x: 1.5,
+            y: 0.0,
+            z: 0.0,
+        })
+        .unwrap();
+        let downrange = Wind::new(WorldVector {
+            x: 0.0,
+            y: 0.0,
+            z: -1.5,
+        })
+        .unwrap();
+        let mut crosswind_shot = launch(0.0, 45.0, 10.0);
+        let mut downrange_shot = crosswind_shot;
+        for _ in 0..120 {
+            assert!(matches!(
+                crosswind_shot.advance_with_terrain(
+                    gravity,
+                    crosswind,
+                    generous_limits(),
+                    no_terrain
+                ),
+                ProjectileAdvance::Active
+            ));
+            assert!(matches!(
+                downrange_shot.advance_with_terrain(
+                    gravity,
+                    downrange,
+                    generous_limits(),
+                    no_terrain
+                ),
+                ProjectileAdvance::Active
+            ));
+        }
+        assert!(crosswind_shot.position.x > 0.0);
+        assert_close(crosswind_shot.position.z, downrange_shot.position.z + 0.75);
+        assert!(downrange_shot.position.z < crosswind_shot.position.z);
     }
 
     #[test]
@@ -616,6 +839,7 @@ mod tests {
         assert_eq!(
             projectile.advance_with_terrain(
                 Gravity::new(0.0).unwrap(),
+                calm_wind(),
                 SimulationLimits::DEVELOPMENT,
                 flat_terrain,
             ),
@@ -640,6 +864,7 @@ mod tests {
 
         let outcome = projectile.advance_with_terrain(
             Gravity::new(0.0).unwrap(),
+            calm_wind(),
             generous_limits(),
             flat_terrain,
         );
@@ -672,6 +897,7 @@ mod tests {
         assert!(matches!(
             projectile.advance_with_terrain(
                 Gravity::new(0.0).unwrap(),
+                calm_wind(),
                 generous_limits(),
                 flat_terrain,
             ),
@@ -697,6 +923,7 @@ mod tests {
 
         let outcome = projectile.advance_with_terrain(
             Gravity::new(0.0).unwrap(),
+            calm_wind(),
             generous_limits(),
             flat_terrain,
         );
@@ -723,6 +950,7 @@ mod tests {
 
         let outcome = projectile.advance_with_terrain(
             Gravity::new(0.0).unwrap(),
+            calm_wind(),
             generous_limits(),
             sloped_terrain,
         );
@@ -756,8 +984,13 @@ mod tests {
             let gravity = Gravity::new(gravity).unwrap();
 
             assert_eq!(
-                first.advance_with_terrain(gravity, generous_limits(), sloped_terrain),
-                second.advance_with_terrain(gravity, generous_limits(), sloped_terrain)
+                first.advance_with_terrain(gravity, calm_wind(), generous_limits(), sloped_terrain),
+                second.advance_with_terrain(
+                    gravity,
+                    calm_wind(),
+                    generous_limits(),
+                    sloped_terrain
+                )
             );
             assert_eq!(first, second);
         }
@@ -781,6 +1014,7 @@ mod tests {
         assert_eq!(
             projectile.advance_with_terrain(
                 Gravity::new(0.0).unwrap(),
+                calm_wind(),
                 SimulationLimits::DEVELOPMENT,
                 flat_terrain,
             ),
@@ -805,6 +1039,7 @@ mod tests {
             .find_map(|_| {
                 match projectile.advance_with_terrain(
                     Gravity::new(8.0).unwrap(),
+                    calm_wind(),
                     SimulationLimits::DEVELOPMENT,
                     |x, z| terrain.height_if_within_bounds(x, z),
                 ) {
@@ -820,6 +1055,43 @@ mod tests {
         assert!(
             (impact.position.y - terrain.height(impact.position.x, impact.position.z)).abs() < 0.01
         );
+    }
+
+    #[test]
+    fn wind_altered_segment_resolves_one_impact_on_the_current_terrain_surface() {
+        let gravity = Gravity::new(8.0).unwrap();
+        let wind = Wind::new(WorldVector {
+            x: 1.5,
+            y: 0.0,
+            z: 0.0,
+        })
+        .unwrap();
+        let mut calm = launch(0.0, 45.0, 10.0);
+        let mut windy = calm;
+        let impact = |projectile: &mut Projectile, wind| {
+            (0..2_400)
+                .find_map(|_| {
+                    match projectile.advance_with_terrain(
+                        gravity,
+                        wind,
+                        generous_limits(),
+                        flat_terrain,
+                    ) {
+                        ProjectileAdvance::Active => None,
+                        ProjectileAdvance::TerrainImpact(impact) => Some(impact),
+                        ProjectileAdvance::OutOfBounds => {
+                            panic!("generous limits must retain the shot")
+                        }
+                    }
+                })
+                .expect("the downward arc must reach flat terrain")
+        };
+        let calm_impact = impact(&mut calm, calm_wind());
+        let windy_impact = impact(&mut windy, wind);
+
+        assert_close(windy_impact.position.y, 0.0);
+        assert!(windy_impact.position.x > calm_impact.position.x);
+        assert_close(windy_impact.position.z, calm_impact.position.z);
     }
 
     #[test]
@@ -849,6 +1121,7 @@ mod tests {
         assert_eq!(
             projectile.advance_with_terrain(
                 Gravity::new(0.0).unwrap(),
+                calm_wind(),
                 generous_limits(),
                 |x, z| terrain.height_if_within_bounds(x, z)
             ),
@@ -884,6 +1157,7 @@ mod tests {
         assert!(matches!(
             projectile.advance_with_terrain(
                 Gravity::new(0.0).unwrap(),
+                calm_wind(),
                 generous_limits(),
                 |x, z| terrain.height_if_within_bounds(x, z)
             ),

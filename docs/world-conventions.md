@@ -50,6 +50,22 @@ They describe Azimuth's game world rather than a rendering API's coordinate nami
 See [projectile-model.md](projectile-model.md) for the deterministic fixed-step motion model and
 development defaults.
 
+## Basic Wind
+
+- Wind is one match-constant horizontal acceleration vector. A random horizontal direction and a
+  gentle 0.75–1.75 units/s² strength are selected once when a match begins. It affects projectile
+  position and velocity on each fixed simulation step, so its displacement accumulates with flight
+  time.
+- The current text HUD reports a barrel-relative direction such as `ahead`, `right`, or
+  `behind-left`, alongside signed X/Z values. It updates while that player aims and is independent
+  of camera orientation. A graphical wind indicator is deferred until the HUD receives its planned
+  graphical frame.
+- Wind has no Y component in this first model. Gravity remains the only vertical environmental
+  acceleration, and wind does not affect tanks, movement, support settling, explosions, terrain,
+  or camera presentation.
+- Wind is intentionally not compensated automatically. Observe where a shot drifts, then adjust
+  azimuth, elevation, or power manually on a later firing turn.
+
 ## Tactical Movement
 
 - At the start of a turn, the current player chooses one primary action: Space starts the existing
