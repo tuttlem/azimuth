@@ -1,6 +1,7 @@
 mod aiming;
 mod battlefield;
 mod combat;
+mod match_setup;
 mod projectile;
 mod tank;
 mod turn;
@@ -20,13 +21,14 @@ use bevy::{
     render::render_resource::PrimitiveTopology,
 };
 use combat::resolve_explosion;
+use match_setup::{ControllerType, MatchConfiguration};
 use projectile::{
     Gravity, Projectile, ProjectileAdvance, SimulationLimits, TerrainImpact, Wind,
     azimuth_from_horizontal_direction,
 };
 use tank::{
     HorizontalDirection, MAX_HEALTH, MovementDirection, MovementRejection, PlayerId, Tank,
-    TankFiringRepresentation, initial_tanks,
+    TankFiringRepresentation, initial_tanks_for_players,
 };
 use turn::{MatchState, TurnPhase, TurnState};
 use weapon::{FiredShot, PlayerWeaponLoadouts, WeaponAvailability, WeaponId, weapon_definition};
@@ -101,7 +103,7 @@ struct AimRepeatState {
 }
 
 #[derive(Resource)]
-struct Tanks([Tank; 2]);
+struct Tanks(Vec<Tank>);
 
 #[derive(Resource)]
 struct CurrentTurn(TurnState);
@@ -145,6 +147,22 @@ struct BattlefieldWind(Wind);
 
 #[derive(Resource, Default)]
 struct MovementFeedback(Option<MovementRejection>);
+
+/// The existing tactical scene is prepared behind setup so the start boundary is explicit:
+/// configuration is chosen before any human action can mutate authoritative match state.
+#[derive(Resource, Default)]
+struct MatchSetupGate {
+    started: bool,
+    selected_slot: usize,
+}
+
+#[derive(Resource)]
+struct PendingMatchConfiguration(MatchConfiguration);
+
+#[derive(Component)]
+struct MatchSetupOverlay;
+#[derive(Component)]
+struct MatchSetupDetails;
 
 #[derive(Resource)]
 struct ProjectileVisualAssets {
@@ -296,8 +314,14 @@ impl Default for BattlefieldCamera {
 
 fn main() {
     let terrain = BattlefieldTerrain::initial();
-    let tanks = initial_tanks(&terrain);
-    let turn = initial_turn_state(tanks);
+    let configuration = MatchConfiguration::default();
+    let player_ids = configuration
+        .players
+        .iter()
+        .map(|player| player.id)
+        .collect::<Vec<_>>();
+    let tanks = initial_tanks_for_players(&terrain, &player_ids);
+    let turn = initial_turn_state(&tanks);
     App::new()
         .add_plugins(DefaultPlugins)
         .insert_resource(Tanks(tanks))
@@ -308,17 +332,20 @@ fn main() {
         .insert_resource(LatestTerrainImpact::default())
         .insert_resource(CurrentImpactExplosionConsumed::default())
         .insert_resource(MovementFeedback::default())
+        .insert_resource(MatchSetupGate::default())
+        .insert_resource(PendingMatchConfiguration(configuration))
         .insert_resource(AimRepeatState::default())
         .insert_resource(BattlefieldGravity(
             Gravity::new(DEVELOPMENT_GRAVITY).expect("development gravity must be valid"),
         ))
         .insert_resource(BattlefieldWind(select_match_wind()))
         .insert_resource(Time::<Fixed>::from_hz(PROJECTILE_FIXED_HZ))
-        .add_systems(Startup, spawn_battlefield_scene)
+        .add_systems(Startup, (spawn_battlefield_scene, spawn_match_setup))
         .add_systems(
             Update,
             (
                 update_battlefield_camera,
+                update_match_setup,
                 select_weapon_input,
                 select_movement_action,
                 update_aiming_input,
@@ -376,15 +403,18 @@ fn spawn_battlefield_scene(
         barrel: meshes.add(Cuboid::new(0.18, 0.18, 1.5)),
         firing_origin_marker: meshes.add(Sphere::new(0.12)),
     };
-    let player_one_material = materials.add(Color::srgb(0.85, 0.25, 0.18));
-    let player_two_material = materials.add(Color::srgb(0.18, 0.4, 0.85));
+    let player_materials = tank_materials(&mut materials);
     let firing_origin_material = materials.add(Color::srgb(0.95, 0.85, 0.2));
+    commands.insert_resource(TankPresentationAssets {
+        materials: player_materials.clone(),
+        firing_origin_material: firing_origin_material.clone(),
+    });
+    commands.insert_resource(tank_meshes.clone());
 
     for tank in tanks.0.iter().copied() {
-        let material = match tank.owner {
-            PlayerId::One => player_one_material.clone(),
-            PlayerId::Two => player_two_material.clone(),
-        };
+        let material = player_materials
+            [(tank.owner.0.saturating_sub(1) as usize) % player_materials.len()]
+        .clone();
         spawn_tank(
             &mut commands,
             tank,
@@ -415,11 +445,266 @@ fn spawn_battlefield_scene(
     });
 }
 
+fn spawn_match_setup(mut commands: Commands) {
+    commands
+        .spawn((
+            MatchSetupOverlay,
+            Node {
+                width: percent(100.0),
+                height: percent(100.0),
+                position_type: PositionType::Absolute,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.02, 0.03, 0.06, 0.88)),
+            Pickable::IGNORE,
+        ))
+        .with_children(|root| {
+            root.spawn((
+                Node {
+                    width: px(500.0),
+                    padding: UiRect::all(px(28.0)),
+                    row_gap: px(14.0),
+                    flex_direction: FlexDirection::Column,
+                    border: UiRect::all(px(2.0)),
+                    ..default()
+                },
+                BackgroundColor(Color::srgba(0.05, 0.09, 0.14, 0.98)),
+                BorderColor::all(Color::srgb(0.9, 0.75, 0.2)),
+            ))
+            .with_children(|panel| {
+                setup_text(
+                    panel,
+                    "AZIMUTH — MATCH SETUP",
+                    30.0,
+                    Color::srgb(0.95, 0.8, 0.25),
+                );
+                panel.spawn((
+                    MatchSetupDetails,
+                    Text::new(""),
+                    TextFont {
+                        font_size: 18.0,
+                        ..default()
+                    },
+                    TextColor(Color::WHITE),
+                ));
+                setup_text(
+                    panel,
+                    "2–8: COUNT | TAB: SLOT | TYPE: NAME | CTRL+C: HUMAN/AI | CTRL+R: REROLL AI",
+                    16.0,
+                    Color::srgb(0.6, 0.75, 0.9),
+                );
+                setup_text(
+                    panel,
+                    "PRESS ENTER TO START MATCH",
+                    18.0,
+                    Color::srgb(0.95, 0.8, 0.25),
+                );
+            });
+        });
+}
+
+fn setup_text(parent: &mut ChildSpawnerCommands, value: &str, font_size: f32, color: Color) {
+    parent.spawn((
+        Text::new(value),
+        TextFont {
+            font_size,
+            ..default()
+        },
+        TextColor(color),
+    ));
+}
+
+#[allow(clippy::too_many_arguments)]
+fn update_match_setup(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut gate: ResMut<MatchSetupGate>,
+    mut configuration: ResMut<PendingMatchConfiguration>,
+    mut tanks: ResMut<Tanks>,
+    mut turn: ResMut<CurrentTurn>,
+    mut weapons: ResMut<WeaponState>,
+    terrain: Res<BattlefieldState>,
+    tank_meshes: Res<TankMeshes>,
+    presentation: Res<TankPresentationAssets>,
+    overlays: Query<Entity, With<MatchSetupOverlay>>,
+    tank_visuals: Query<Entity, With<TankVisual>>,
+    mut commands: Commands,
+    mut details: Query<&mut Text, With<MatchSetupDetails>>,
+) {
+    if gate.started {
+        return;
+    }
+    let requested_count = [
+        (KeyCode::Digit2, 2),
+        (KeyCode::Digit3, 3),
+        (KeyCode::Digit4, 4),
+        (KeyCode::Digit5, 5),
+        (KeyCode::Digit6, 6),
+        (KeyCode::Digit7, 7),
+        (KeyCode::Digit8, 8),
+    ]
+    .into_iter()
+    .find_map(|(key, count)| keyboard.just_pressed(key).then_some(count));
+    if let Some(count) = requested_count {
+        configuration
+            .0
+            .set_player_count(count)
+            .expect("setup controls use valid counts");
+        gate.selected_slot = gate.selected_slot.min(count - 1);
+    }
+    if keyboard.just_pressed(KeyCode::Tab) {
+        gate.selected_slot = (gate.selected_slot + 1) % configuration.0.players.len();
+    }
+    let control_held =
+        keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
+    if control_held && keyboard.just_pressed(KeyCode::KeyC) {
+        let (id, previous) = {
+            let slot = &configuration.0.players[gate.selected_slot];
+            (slot.id, slot.controller)
+        };
+        let controller = if previous == ControllerType::Human {
+            ControllerType::Ai
+        } else {
+            ControllerType::Human
+        };
+        configuration.0.set_controller(id, controller);
+    }
+    if control_held && keyboard.just_pressed(KeyCode::KeyR) {
+        let id = configuration.0.players[gate.selected_slot].id;
+        configuration.0.reroll_ai_name(id);
+    }
+    if !control_held {
+        let id = configuration.0.players[gate.selected_slot].id;
+        if keyboard.just_pressed(KeyCode::Backspace) {
+            configuration.0.backspace_human_name(id);
+        } else if let Some(character) = setup_name_character(&keyboard) {
+            configuration.0.append_human_name_character(id, character);
+        }
+    }
+    let lines = configuration
+        .0
+        .players
+        .iter()
+        .enumerate()
+        .map(|(index, player)| {
+            let marker = if index == gate.selected_slot {
+                ">"
+            } else {
+                " "
+            };
+            format!(
+                "{marker} {}. [{}] {}    {:?}",
+                index + 1,
+                player.visual.label(),
+                player.display_name,
+                player.controller
+            )
+            .to_uppercase()
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let validation_message = match configuration.0.validate() {
+        Ok(()) => "ENTER: START MATCH".to_owned(),
+        Err(match_setup::MatchConfigurationError::AiUnavailable) => {
+            "AI opponents are not available yet. Change every slot to Human to start.".to_owned()
+        }
+        Err(error) => format!("Cannot start: {error:?}"),
+    };
+    for mut text in &mut details {
+        text.0 = format!(
+            "PLAYERS: {}\n{lines}\n\n{validation_message}",
+            configuration.0.players.len()
+        );
+    }
+    if keyboard.just_pressed(KeyCode::Enter) {
+        configuration.0.trim_human_names();
+    }
+    if keyboard.just_pressed(KeyCode::Enter) && configuration.0.validate().is_ok() {
+        let ids = configuration
+            .0
+            .players
+            .iter()
+            .map(|player| player.id)
+            .collect::<Vec<_>>();
+        tanks.0 = initial_tanks_for_players(&terrain.0, &ids);
+        turn.0 = initial_turn_state(&tanks.0);
+        weapons.0 = PlayerWeaponLoadouts::new(&ids);
+        for entity in &tank_visuals {
+            commands.entity(entity).despawn();
+        }
+        for tank in tanks.0.iter().copied() {
+            let material = presentation.materials
+                [(tank.owner.0.saturating_sub(1) as usize) % presentation.materials.len()]
+            .clone();
+            spawn_tank(
+                &mut commands,
+                tank,
+                &tank_meshes,
+                material,
+                presentation.firing_origin_material.clone(),
+                active_firing_representation(tank, turn.0.aim_for(tank.owner)),
+            );
+        }
+        gate.started = true;
+        for overlay in &overlays {
+            commands.entity(overlay).despawn();
+        }
+    }
+}
+
+/// The setup uses a deliberately small keyboard editor instead of a general UI text-input
+/// framework.  It accepts the printable letters and a space needed by the short display-name
+/// contract; Shift changes case and Backspace is handled by the caller.
+fn setup_name_character(keyboard: &ButtonInput<KeyCode>) -> Option<char> {
+    let shifted = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
+    let keys = [
+        (KeyCode::KeyA, 'a'),
+        (KeyCode::KeyB, 'b'),
+        (KeyCode::KeyC, 'c'),
+        (KeyCode::KeyD, 'd'),
+        (KeyCode::KeyE, 'e'),
+        (KeyCode::KeyF, 'f'),
+        (KeyCode::KeyG, 'g'),
+        (KeyCode::KeyH, 'h'),
+        (KeyCode::KeyI, 'i'),
+        (KeyCode::KeyJ, 'j'),
+        (KeyCode::KeyK, 'k'),
+        (KeyCode::KeyL, 'l'),
+        (KeyCode::KeyM, 'm'),
+        (KeyCode::KeyN, 'n'),
+        (KeyCode::KeyO, 'o'),
+        (KeyCode::KeyP, 'p'),
+        (KeyCode::KeyQ, 'q'),
+        (KeyCode::KeyR, 'r'),
+        (KeyCode::KeyS, 's'),
+        (KeyCode::KeyT, 't'),
+        (KeyCode::KeyU, 'u'),
+        (KeyCode::KeyV, 'v'),
+        (KeyCode::KeyW, 'w'),
+        (KeyCode::KeyX, 'x'),
+        (KeyCode::KeyY, 'y'),
+        (KeyCode::KeyZ, 'z'),
+    ];
+    if keyboard.just_pressed(KeyCode::Space) {
+        Some(' ')
+    } else {
+        keys.into_iter().find_map(|(key, character)| {
+            keyboard.just_pressed(key).then_some(if shifted {
+                character.to_ascii_uppercase()
+            } else {
+                character
+            })
+        })
+    }
+}
+
 // This direct Bevy system deliberately keeps the one atomic launch boundary visible; a custom
 // SystemParam would add indirection without reducing its gameplay responsibilities.
 #[allow(clippy::too_many_arguments)]
 fn launch_aimed_projectile(
     keyboard: Res<ButtonInput<KeyCode>>,
+    setup: Res<MatchSetupGate>,
     tanks: Res<Tanks>,
     assets: Res<ProjectileVisualAssets>,
     mut flight: ResMut<ProjectileFlight>,
@@ -428,7 +713,8 @@ fn launch_aimed_projectile(
     mut turn: ResMut<CurrentTurn>,
     mut commands: Commands,
 ) {
-    if !keyboard.just_pressed(KeyCode::Space)
+    if !setup.started
+        || !keyboard.just_pressed(KeyCode::Space)
         || flight.0.is_some()
         || turn.0.match_state != MatchState::InProgress
         || turn.0.phase != TurnPhase::Choosing
@@ -443,7 +729,7 @@ fn launch_aimed_projectile(
     let Some((player, aiming)) = turn.0.begin_fire() else {
         unreachable!("choosing player with a committed weapon must begin fire");
     };
-    let tank = tank_for_player(tanks.0, player);
+    let tank = tank_for_player(&tanks.0, player);
     let parameters = launch_parameters_for_aim(tank, aiming);
     let projectile =
         Projectile::launch_with_wind_response(parameters, definition.projectile.wind_response);
@@ -463,11 +749,13 @@ fn launch_aimed_projectile(
 
 fn select_weapon_input(
     keyboard: Res<ButtonInput<KeyCode>>,
+    setup: Res<MatchSetupGate>,
     flight: Res<ProjectileFlight>,
     turn: Res<CurrentTurn>,
     mut weapons: ResMut<WeaponState>,
 ) {
-    if flight.0.is_some()
+    if !setup.started
+        || flight.0.is_some()
         || turn.0.match_state != MatchState::InProgress
         || turn.0.phase != TurnPhase::Choosing
     {
@@ -492,23 +780,25 @@ fn select_weapon_input(
 
 fn select_movement_action(
     keyboard: Res<ButtonInput<KeyCode>>,
+    setup: Res<MatchSetupGate>,
     mut feedback: ResMut<MovementFeedback>,
     mut turn: ResMut<CurrentTurn>,
 ) {
-    if keyboard.just_pressed(KeyCode::KeyM) && turn.0.begin_movement() {
+    if setup.started && keyboard.just_pressed(KeyCode::KeyM) && turn.0.begin_movement() {
         feedback.0 = None;
     }
 }
 
 fn update_movement_input(
     keyboard: Res<ButtonInput<KeyCode>>,
+    setup: Res<MatchSetupGate>,
     terrain: Res<BattlefieldState>,
     camera: Single<&BattlefieldCamera>,
     mut tanks: ResMut<Tanks>,
     mut feedback: ResMut<MovementFeedback>,
     mut turn: ResMut<CurrentTurn>,
 ) {
-    if turn.0.remaining_movement().is_none() {
+    if !setup.started || turn.0.remaining_movement().is_none() {
         return;
     }
     if keyboard.just_pressed(KeyCode::Enter) {
@@ -521,7 +811,7 @@ fn update_movement_input(
         return;
     };
     let player = turn.0.current_player;
-    let tank = tank_for_player(tanks.0, player);
+    let tank = tank_for_player(&tanks.0, player);
     match tank.step_on_terrain(&terrain.0, direction) {
         Ok(moved) => {
             *tank_for_player_mut(&mut tanks.0, player) = moved;
@@ -578,12 +868,13 @@ fn nearest_cardinal_movement_direction(x: f32, z: f32) -> MovementDirection {
 
 fn update_aiming_input(
     keyboard: Res<ButtonInput<KeyCode>>,
+    setup: Res<MatchSetupGate>,
     flight: Res<ProjectileFlight>,
     time: Res<Time>,
     mut repeat_state: ResMut<AimRepeatState>,
     mut turn: ResMut<CurrentTurn>,
 ) {
-    if flight.0.is_some() || turn.0.phase != TurnPhase::Choosing {
+    if !setup.started || flight.0.is_some() || turn.0.phase != TurnPhase::Choosing {
         repeat_state.reset();
         return;
     }
@@ -680,10 +971,14 @@ fn launch_parameters_for_aim(tank: Tank, aiming: AimingState) -> projectile::Sho
     aiming.shot_parameters(firing.muzzle_position)
 }
 
-fn initial_turn_state(tanks: [Tank; 2]) -> TurnState {
+fn initial_turn_state(tanks: impl AsRef<[Tank]>) -> TurnState {
     TurnState::new(
-        initial_aim_for_tank(tank_for_player(tanks, PlayerId::One)),
-        initial_aim_for_tank(tank_for_player(tanks, PlayerId::Two)),
+        tanks
+            .as_ref()
+            .iter()
+            .copied()
+            .map(|tank| (tank.owner, initial_aim_for_tank(tank)))
+            .collect(),
     )
 }
 
@@ -694,14 +989,15 @@ fn initial_aim_for_tank(tank: Tank) -> AimingState {
     AimingState::new(azimuth, 45.0, 18.0)
 }
 
-fn tank_for_player(tanks: [Tank; 2], player: PlayerId) -> Tank {
-    tanks
-        .into_iter()
+fn tank_for_player(tanks: impl AsRef<[Tank]>, player: PlayerId) -> Tank {
+    *tanks
+        .as_ref()
+        .iter()
         .find(|tank| tank.owner == player)
         .expect("each current player must own one initial tank")
 }
 
-fn tank_for_player_mut(tanks: &mut [Tank; 2], player: PlayerId) -> &mut Tank {
+fn tank_for_player_mut(tanks: &mut [Tank], player: PlayerId) -> &mut Tank {
     tanks
         .iter_mut()
         .find(|tank| tank.owner == player)
@@ -716,7 +1012,7 @@ fn sync_tank_aim(
     mut muzzles: TankMuzzleTransforms,
 ) {
     for (owner, mut transform) in &mut turrets {
-        let tank = tank_for_player(tanks.0, owner.0);
+        let tank = tank_for_player(&tanks.0, owner.0);
         let firing = active_firing_representation(tank, turn.0.aim_for(owner.0));
         *transform =
             direction_transform(firing.turret_forward).with_translation(Vec3::new(0.0, 1.0, 0.0));
@@ -731,7 +1027,7 @@ fn sync_tank_aim(
         };
     }
     for (owner, mut transform) in &mut muzzles {
-        let tank = tank_for_player(tanks.0, owner.0);
+        let tank = tank_for_player(&tanks.0, owner.0);
         let firing = active_firing_representation(tank, turn.0.aim_for(owner.0));
         *transform = Transform::from_translation(Vec3::new(
             firing.muzzle_position.x - tank.pose.position.x,
@@ -747,11 +1043,11 @@ fn sync_tank_pose(
     mut bodies: Query<(&TankBody, &mut Transform), Without<TankVisual>>,
 ) {
     for (owner, mut transform) in &mut roots {
-        let position = tank_for_player(tanks.0, owner.0).pose.position;
+        let position = tank_for_player(&tanks.0, owner.0).pose.position;
         transform.translation = to_bevy_position(position);
     }
     for (owner, mut transform) in &mut bodies {
-        let tank = tank_for_player(tanks.0, owner.0);
+        let tank = tank_for_player(&tanks.0, owner.0);
         *transform =
             direction_transform(tank.pose.body_forward).with_translation(Vec3::new(0.0, 0.4, 0.0));
     }
@@ -759,7 +1055,7 @@ fn sync_tank_pose(
 
 fn sync_tank_elimination(tanks: Res<Tanks>, mut visuals: Query<(&TankVisual, &mut Visibility)>) {
     for (owner, mut visibility) in &mut visuals {
-        *visibility = if tank_for_player(tanks.0, owner.0).is_eliminated() {
+        *visibility = if tank_for_player(&tanks.0, owner.0).is_eliminated() {
             Visibility::Hidden
         } else {
             Visibility::Visible
@@ -940,11 +1236,12 @@ fn health_bar(parent: &mut ChildSpawnerCommands, player: PlayerId) {
 
 fn tactical_hud_view(
     turn: TurnState,
-    tanks: [Tank; 2],
+    tanks: impl AsRef<[Tank]>,
     weapons: PlayerWeaponLoadouts,
     wind: Wind,
     feedback: Option<MovementRejection>,
 ) -> TacticalHudView {
+    let tanks = tanks.as_ref();
     let action = if turn.match_state != MatchState::InProgress {
         HudAction::Finished
     } else {
@@ -982,13 +1279,24 @@ fn sync_tactical_hud(
     weapons: Res<WeaponState>,
     wind: Res<BattlefieldWind>,
     feedback: Res<MovementFeedback>,
+    configuration: Res<PendingMatchConfiguration>,
     mut text: Query<(&HudText, &mut Text)>,
     mut fills: Query<(&HudHealthFill, &mut Node)>,
     mut decorations: HudDecorations,
 ) {
-    let view = tactical_hud_view(turn.0, tanks.0, weapons.0, wind.0, feedback.0);
+    let view = tactical_hud_view(
+        turn.0.clone(),
+        tanks.0.clone(),
+        weapons.0.clone(),
+        wind.0,
+        feedback.0,
+    );
     for (field, mut value) in &mut text {
-        value.0 = hud_field_text(field.0, view);
+        value.0 = if field.0 == HudTextField::Match {
+            configured_match_text(view, &configuration.0)
+        } else {
+            hud_field_text(field.0, view)
+        };
     }
     for (fill, mut node) in &mut fills {
         let health = if fill.0 == PlayerId::One {
@@ -1015,6 +1323,35 @@ fn sync_tactical_hud(
             border.bottom = active_colour;
             border.left = active_colour;
         }
+    }
+}
+
+/// Names remain configuration-owned metadata; the running HUD only resolves stable IDs through
+/// that metadata and never uses editable text as an identity key.
+fn configured_match_text(view: TacticalHudView, configuration: &MatchConfiguration) -> String {
+    let name_for = |id| {
+        configuration
+            .players
+            .iter()
+            .find(|player| player.id == id)
+            .map_or_else(|| player_name(id), |player| player.display_name.clone())
+    };
+    match view.result {
+        MatchState::Winner(player) => format!("{} WINS", name_for(player)),
+        MatchState::Draw => "DRAW".into(),
+        MatchState::InProgress => format!(
+            "{} - {}",
+            name_for(
+                view.active_player
+                    .expect("active player while match is in progress")
+            ),
+            match view.action {
+                HudAction::Choose => "CHOOSE ACTION",
+                HudAction::Moving => "MOVING",
+                HudAction::Resolving => "RESOLVING SHOT",
+                HudAction::Finished => "MATCH OVER",
+            }
+        ),
     }
 }
 
@@ -1113,10 +1450,23 @@ fn player_health_text(name: &str, health: u8, out: bool) -> String {
     }
 }
 fn player_color(player: PlayerId) -> Color {
-    match player {
-        PlayerId::One => Color::srgb(0.85, 0.25, 0.18),
-        PlayerId::Two => Color::srgb(0.18, 0.4, 0.85),
-    }
+    const COLOURS: [Color; 8] = [
+        Color::srgb(0.85, 0.25, 0.18),
+        Color::srgb(0.18, 0.4, 0.85),
+        Color::srgb(0.2, 0.72, 0.32),
+        Color::srgb(0.95, 0.5, 0.12),
+        Color::srgb(0.58, 0.3, 0.8),
+        Color::srgb(0.1, 0.72, 0.72),
+        Color::srgb(0.9, 0.28, 0.57),
+        Color::srgb(0.92, 0.82, 0.18),
+    ];
+    COLOURS[(player.0.saturating_sub(1) as usize) % COLOURS.len()]
+}
+
+fn tank_materials(materials: &mut Assets<StandardMaterial>) -> Vec<Handle<StandardMaterial>> {
+    (1..=8)
+        .map(|id| materials.add(player_color(PlayerId(id))))
+        .collect()
 }
 
 /// Selects one gentle, constant wind for the match. The sampled value becomes authoritative
@@ -1152,11 +1502,8 @@ fn next_random_fraction(seed: &mut u64) -> f32 {
     ((*seed >> 40) as f32) / ((1_u32 << 24) as f32)
 }
 
-fn player_name(player: PlayerId) -> &'static str {
-    match player {
-        PlayerId::One => "Player One",
-        PlayerId::Two => "Player Two",
-    }
+fn player_name(player: PlayerId) -> String {
+    format!("Player {}", player.0)
 }
 
 fn advance_projectile(
@@ -1192,7 +1539,7 @@ fn resolve_projectile_advance(
     shot: FiredShot,
     advance: ProjectileAdvance,
     terrain: &mut BattlefieldTerrain,
-    tanks: &mut [Tank; 2],
+    tanks: &mut [Tank],
     latest_impact: &mut LatestTerrainImpact,
     turn: &mut TurnState,
 ) -> Option<FiredShot> {
@@ -1237,7 +1584,7 @@ fn advance_tank_settling(
     complete_resolution_if_settled(&tanks.0, &mut turn.0);
 }
 
-fn reconcile_living_tank_support(tanks: &mut [Tank; 2], terrain: &BattlefieldTerrain) {
+fn reconcile_living_tank_support(tanks: &mut [Tank], terrain: &BattlefieldTerrain) {
     for tank in tanks {
         if !tank.is_eliminated() {
             tank.reconcile_support(terrain);
@@ -1245,13 +1592,13 @@ fn reconcile_living_tank_support(tanks: &mut [Tank; 2], terrain: &BattlefieldTer
     }
 }
 
-fn any_living_tank_is_settling(tanks: &[Tank; 2]) -> bool {
+fn any_living_tank_is_settling(tanks: &[Tank]) -> bool {
     tanks
         .iter()
         .any(|tank| !tank.is_eliminated() && tank.is_settling())
 }
 
-fn complete_resolution_if_settled(tanks: &[Tank; 2], turn: &mut TurnState) {
+fn complete_resolution_if_settled(tanks: &[Tank], turn: &mut TurnState) {
     if !any_living_tank_is_settling(tanks) {
         assert!(
             turn.complete_fire_resolution(survivors(tanks)),
@@ -1260,8 +1607,8 @@ fn complete_resolution_if_settled(tanks: &[Tank; 2], turn: &mut TurnState) {
     }
 }
 
-fn survivors(tanks: &[Tank; 2]) -> [bool; 2] {
-    [!tanks[0].is_eliminated(), !tanks[1].is_eliminated()]
+fn survivors(tanks: &[Tank]) -> Vec<bool> {
+    tanks.iter().map(|tank| !tank.is_eliminated()).collect()
 }
 
 fn sync_battlefield_mesh(
@@ -1391,11 +1738,18 @@ fn to_bevy_position(position: WorldPosition) -> Vec3 {
     Vec3::new(position.x, position.y, position.z)
 }
 
+#[derive(Resource, Clone)]
 struct TankMeshes {
     body: Handle<Mesh>,
     turret: Handle<Mesh>,
     barrel: Handle<Mesh>,
     firing_origin_marker: Handle<Mesh>,
+}
+
+#[derive(Resource)]
+struct TankPresentationAssets {
+    materials: Vec<Handle<StandardMaterial>>,
+    firing_origin_material: Handle<StandardMaterial>,
 }
 
 fn spawn_tank(
@@ -1408,10 +1762,7 @@ fn spawn_tank(
 ) {
     let position = tank.pose.position;
     let firing_origin = firing.muzzle_position;
-    let player_name = match tank.owner {
-        PlayerId::One => "Player one tank",
-        PlayerId::Two => "Player two tank",
-    };
+    let player_name = format!("Player {} tank", tank.owner.0);
 
     commands
         .spawn((
@@ -1473,12 +1824,12 @@ fn update_battlefield_camera(
 ) {
     let (tanks, turn, flight) = gameplay;
     let (mut transform, mut controller) = camera.into_inner();
-    let intent = camera_presentation_intent(turn.0, flight.0.map(|shot| shot.projectile));
+    let intent = camera_presentation_intent(turn.0.clone(), flight.0.map(|shot| shot.projectile));
     if controller.presentation_intent != Some(intent) {
         controller.presentation_intent = Some(intent);
-        controller.desired_pose = camera_pose_for_intent(intent, tanks.0, turn.0);
-        controller.tracked_aim_yaw = active_aim_yaw(intent, turn.0);
-    } else if let Some(aim_yaw) = active_aim_yaw(intent, turn.0) {
+        controller.desired_pose = camera_pose_for_intent(intent, tanks.0.clone(), turn.0.clone());
+        controller.tracked_aim_yaw = active_aim_yaw(intent, turn.0.clone());
+    } else if let Some(aim_yaw) = active_aim_yaw(intent, turn.0.clone()) {
         if let Some(previous_aim_yaw) = controller.tracked_aim_yaw {
             controller.desired_pose.yaw += shortest_angle_delta(previous_aim_yaw, aim_yaw);
         }
@@ -1508,9 +1859,10 @@ fn update_battlefield_camera(
 }
 
 fn camera_presentation_intent(
-    turn: TurnState,
+    turn: impl std::borrow::Borrow<TurnState>,
     flight: Option<Projectile>,
 ) -> CameraPresentationIntent {
+    let turn = turn.borrow();
     if flight.is_some() {
         CameraPresentationIntent::WatchingShot
     } else {
@@ -1529,9 +1881,11 @@ fn active_aim_yaw(intent: CameraPresentationIntent, turn: TurnState) -> Option<f
 
 fn camera_pose_for_intent(
     intent: CameraPresentationIntent,
-    tanks: [Tank; 2],
-    turn: TurnState,
+    tanks: impl AsRef<[Tank]>,
+    turn: impl std::borrow::Borrow<TurnState>,
 ) -> CameraPose {
+    let tanks = tanks.as_ref();
+    let turn = turn.borrow();
     match intent {
         CameraPresentationIntent::ActivePlayer(player) => {
             let tank = tank_for_player(tanks, player);
@@ -1539,7 +1893,7 @@ fn camera_pose_for_intent(
                 target: clamp_camera_target(
                     to_bevy_position(tank.pose.position) + Vec3::Y * ACTIVE_PLAYER_CAMERA_HEIGHT,
                 ),
-                yaw: active_aim_yaw(intent, turn)
+                yaw: active_aim_yaw(intent, turn.clone())
                     .expect("an active-player camera intent must have aiming yaw"),
                 pitch: ACTIVE_PLAYER_CAMERA_PITCH,
                 distance: ACTIVE_PLAYER_CAMERA_DISTANCE,
@@ -1603,9 +1957,43 @@ fn create_battlefield_mesh(terrain: &BattlefieldTerrain) -> Mesh {
 mod tests {
     use super::*;
     use crate::battlefield::Crater;
+    use crate::tank::initial_tanks;
 
     fn basic_fired_shot(projectile: Projectile) -> FiredShot {
         FiredShot::new(weapon_definition(WeaponId::BasicShell), projectile)
+    }
+
+    #[test]
+    fn configured_names_drive_active_and_winner_hud_text() {
+        let mut configuration = MatchConfiguration::default();
+        configuration.set_name(PlayerId::One, "Ada").unwrap();
+        let choosing = TacticalHudView {
+            active_player: Some(PlayerId::One),
+            action: HudAction::Choose,
+            player_one_health: MAX_HEALTH,
+            player_two_health: MAX_HEALTH,
+            player_one_eliminated: false,
+            player_two_eliminated: false,
+            aim: None,
+            weapon: None,
+            wind: Wind::new(WorldVector::ZERO).unwrap(),
+            movement: None,
+            result: MatchState::InProgress,
+        };
+        assert_eq!(
+            configured_match_text(choosing, &configuration),
+            "Ada - CHOOSE ACTION"
+        );
+        assert_eq!(
+            configured_match_text(
+                TacticalHudView {
+                    result: MatchState::Winner(PlayerId::One),
+                    ..choosing
+                },
+                &configuration,
+            ),
+            "Ada WINS"
+        );
     }
 
     #[test]
@@ -1797,8 +2185,13 @@ mod tests {
         })
         .unwrap();
         let choosing = initial_turn_state(tanks);
-        let choosing_view =
-            tactical_hud_view(choosing, tanks, PlayerWeaponLoadouts::default(), wind, None);
+        let choosing_view = tactical_hud_view(
+            choosing.clone(),
+            tanks,
+            PlayerWeaponLoadouts::default(),
+            wind,
+            None,
+        );
         assert_eq!(choosing_view.active_player, Some(PlayerId::One));
         assert_eq!(choosing_view.action, HudAction::Choose);
         assert_eq!(choosing_view.player_one_health, MAX_HEALTH);
@@ -1806,10 +2199,10 @@ mod tests {
         assert_eq!(choosing_view.aim, Some(choosing.current_aim()));
         assert_eq!(choosing_view.movement, None);
 
-        let mut moving = choosing;
+        let mut moving = choosing.clone();
         assert!(moving.begin_movement());
         let moving_view = tactical_hud_view(
-            moving,
+            moving.clone(),
             tanks,
             PlayerWeaponLoadouts::default(),
             wind,
@@ -1824,10 +2217,10 @@ mod tests {
             ))
         );
 
-        let mut resolving = choosing;
+        let mut resolving = choosing.clone();
         assert!(resolving.begin_fire().is_some());
         let resolving_view = tactical_hud_view(
-            resolving,
+            resolving.clone(),
             tanks,
             PlayerWeaponLoadouts::default(),
             wind,
@@ -1850,7 +2243,7 @@ mod tests {
                 .for_player_mut(PlayerId::One)
                 .select(WeaponId::HighExplosive)
         );
-        let view = tactical_hud_view(turn, tanks, weapons, wind, None);
+        let view = tactical_hud_view(turn.clone(), tanks, weapons.clone(), wind, None);
 
         assert_eq!(
             view.weapon,
@@ -1870,7 +2263,7 @@ mod tests {
                 .for_player_mut(PlayerId::One)
                 .select(WeaponId::HeavyShell)
         );
-        let heavy_view = tactical_hud_view(turn, tanks, weapons, wind, None);
+        let heavy_view = tactical_hud_view(turn.clone(), tanks, weapons, wind, None);
         assert_eq!(
             heavy_view.weapon,
             Some((WeaponId::HeavyShell, WeaponAvailability::Remaining(2)))
@@ -2052,7 +2445,7 @@ mod tests {
         let tanks = initial_tanks(&terrain);
         let mut turn = initial_turn_state(tanks);
         assert_eq!(
-            camera_presentation_intent(turn, None),
+            camera_presentation_intent(&turn, None),
             CameraPresentationIntent::ActivePlayer(PlayerId::One)
         );
 
@@ -2062,7 +2455,7 @@ mod tests {
             z: 0.0,
         }));
         assert_eq!(
-            camera_presentation_intent(turn, Some(projectile)),
+            camera_presentation_intent(&turn, Some(projectile)),
             CameraPresentationIntent::WatchingShot
         );
 
@@ -2082,7 +2475,7 @@ mod tests {
         let pose = camera_pose_for_intent(
             CameraPresentationIntent::ActivePlayer(PlayerId::One),
             tanks,
-            turn,
+            &turn,
         );
         assert!(pose.target.x.abs() <= HALF_EXTENT);
         assert!(pose.target.z.abs() <= HALF_EXTENT);
@@ -2103,7 +2496,7 @@ mod tests {
         let tanks = initial_tanks(&terrain);
         let mut turn = initial_turn_state(tanks);
         let intent = CameraPresentationIntent::ActivePlayer(PlayerId::One);
-        let before = camera_pose_for_intent(intent, tanks, turn);
+        let before = camera_pose_for_intent(intent, tanks, &turn);
         turn.apply_current_aim(AimAdjustment::AzimuthIncrease, false);
         let after = camera_pose_for_intent(intent, tanks, turn);
 
@@ -2200,10 +2593,10 @@ mod tests {
         let mut terrain = BattlefieldTerrain::initial();
         let mut tanks = initial_tanks(&terrain);
         let mut impact = LatestTerrainImpact::default();
-        let mut turn = TurnState::new(
-            AimingState::new(0.0, 45.0, 18.0),
-            AimingState::new(180.0, 45.0, 18.0),
-        );
+        let mut turn = TurnState::new(vec![
+            (PlayerId::One, AimingState::new(0.0, 45.0, 18.0)),
+            (PlayerId::Two, AimingState::new(180.0, 45.0, 18.0)),
+        ]);
         let projectile = Projectile::launch(AimingState::new(0.0, 45.0, 18.0).shot_parameters(
             WorldPosition {
                 x: 0.0,
@@ -2432,10 +2825,10 @@ mod tests {
         let mut tanks = initial_tanks(&terrain);
         let before = terrain.height(0.0, 0.0);
         let mut impact = LatestTerrainImpact::default();
-        let mut turn = TurnState::new(
-            AimingState::new(0.0, 45.0, 18.0),
-            AimingState::new(180.0, 45.0, 18.0),
-        );
+        let mut turn = TurnState::new(vec![
+            (PlayerId::One, AimingState::new(0.0, 45.0, 18.0)),
+            (PlayerId::Two, AimingState::new(180.0, 45.0, 18.0)),
+        ]);
         let projectile = Projectile::launch(AimingState::new(0.0, 45.0, 18.0).shot_parameters(
             WorldPosition {
                 x: 0.0,

@@ -223,23 +223,40 @@ impl PlayerWeaponLoadout {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub struct PlayerWeaponLoadouts(pub [PlayerWeaponLoadout; 2]);
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PlayerWeaponLoadouts(pub Vec<(PlayerId, PlayerWeaponLoadout)>);
 
-impl PlayerWeaponLoadouts {
-    pub fn for_player(&self, player: PlayerId) -> PlayerWeaponLoadout {
-        self.0[player_index(player)]
-    }
-
-    pub fn for_player_mut(&mut self, player: PlayerId) -> &mut PlayerWeaponLoadout {
-        &mut self.0[player_index(player)]
+impl Default for PlayerWeaponLoadouts {
+    fn default() -> Self {
+        Self::new(&[PlayerId::One, PlayerId::Two])
     }
 }
 
-fn player_index(player: PlayerId) -> usize {
-    match player {
-        PlayerId::One => 0,
-        PlayerId::Two => 1,
+impl PlayerWeaponLoadouts {
+    pub fn new(players: &[PlayerId]) -> Self {
+        Self(
+            players
+                .iter()
+                .copied()
+                .map(|player| (player, PlayerWeaponLoadout::default()))
+                .collect(),
+        )
+    }
+
+    pub fn for_player(&self, player: PlayerId) -> PlayerWeaponLoadout {
+        self.0
+            .iter()
+            .find(|(owner, _)| *owner == player)
+            .map(|(_, loadout)| *loadout)
+            .expect("every participant must have a loadout")
+    }
+
+    pub fn for_player_mut(&mut self, player: PlayerId) -> &mut PlayerWeaponLoadout {
+        self.0
+            .iter_mut()
+            .find(|(owner, _)| *owner == player)
+            .map(|(_, loadout)| loadout)
+            .expect("every participant must have a loadout")
     }
 }
 

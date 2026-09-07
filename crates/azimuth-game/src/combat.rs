@@ -14,16 +14,17 @@ pub fn damage_at(centre: WorldPosition, tank_position: WorldPosition, impact: Im
 /// Calculate every blast result before changing health so one tank cannot affect another tank's
 /// eligibility for this same explosion.
 pub fn resolve_explosion(
-    tanks: &mut [Tank; 2],
+    tanks: &mut [Tank],
     centre: WorldPosition,
     impact: ImpactProfile,
-) -> [u8; 2] {
-    let damages = [
-        damage_at(centre, tanks[0].pose.position, impact),
-        damage_at(centre, tanks[1].pose.position, impact),
-    ];
-    tanks[0].apply_damage(damages[0]);
-    tanks[1].apply_damage(damages[1]);
+) -> Vec<u8> {
+    let damages: Vec<_> = tanks
+        .iter()
+        .map(|tank| damage_at(centre, tank.pose.position, impact))
+        .collect();
+    for (tank, damage) in tanks.iter_mut().zip(&damages) {
+        tank.apply_damage(*damage);
+    }
     damages
 }
 
@@ -105,7 +106,7 @@ mod tests {
                 },
                 weapon_definition(WeaponId::BasicShell).impact,
             ),
-            [40, 20]
+            vec![40, 20]
         );
         assert_eq!(tanks[0].health, MAX_HEALTH - 40);
         assert_eq!(tanks[1].health, MAX_HEALTH - 20);

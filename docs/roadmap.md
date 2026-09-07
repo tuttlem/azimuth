@@ -691,8 +691,8 @@ Battlefields should differ through physical rules as well as terrain.
 
 # 17. Match Setup
 
-* [ ] Select number of players.
-* [ ] Select human/AI players.
+* [x] Select number of players.
+* [x] Select human/AI players at match configuration time; AI opponents remain unavailable.
 * [ ] Select battlefield.
 * [ ] Select environment preset.
 * [ ] Select random seed where appropriate.
@@ -1128,7 +1128,7 @@ These are conceptual milestones rather than fixed specification sequences.
 
 ## Milestone H — Complete Match Experience
 
-* [ ] Match setup exists.
+* [x] Match setup exists.
 * [ ] Human-vs-human game flow is polished.
 * [ ] AI opponent exists.
 * [ ] Camera transitions support the action.

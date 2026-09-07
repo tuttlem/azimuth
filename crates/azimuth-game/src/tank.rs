@@ -25,10 +25,25 @@ pub struct TankFiringRepresentation {
     pub muzzle_position: WorldPosition,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum PlayerId {
-    One,
-    Two,
+/// Stable gameplay identity. The numeric value is allocated by Match Setup and never comes from
+/// a display name, colour, current turn, or inventory position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct PlayerId(pub u8);
+
+impl PlayerId {
+    #[allow(non_upper_case_globals)]
+    pub const One: Self = Self(1);
+    #[allow(non_upper_case_globals)]
+    pub const Two: Self = Self(2);
+
+    #[cfg(test)]
+    pub fn other(self) -> Self {
+        if self == Self::One {
+            Self::Two
+        } else {
+            Self::One
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,15 +74,6 @@ impl MovementDirection {
 pub enum MovementRejection {
     Bounds,
     Slope,
-}
-
-impl PlayerId {
-    pub fn other(self) -> Self {
-        match self {
-            Self::One => Self::Two,
-            Self::Two => Self::One,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -255,26 +261,44 @@ impl Tank {
     }
 }
 
-pub fn initial_tanks(terrain: &BattlefieldTerrain) -> [Tank; 2] {
-    let player_one_direction = HorizontalDirection::new(3.0, 2.0);
-    let player_two_direction = HorizontalDirection::new(-3.0, -2.0);
+pub fn initial_tanks_for_players(terrain: &BattlefieldTerrain, players: &[PlayerId]) -> Vec<Tank> {
+    const POSITIONS: [(f32, f32); 8] = [
+        (-12.0, -8.0),
+        (12.0, 8.0),
+        (-12.0, 8.0),
+        (12.0, -8.0),
+        (-18.0, 0.0),
+        (18.0, 0.0),
+        (0.0, -12.0),
+        (0.0, 12.0),
+    ];
+    assert!(
+        (2..=8).contains(&players.len()),
+        "matches support two through eight tanks"
+    );
+    players
+        .iter()
+        .copied()
+        .zip(POSITIONS)
+        .map(|(owner, (x, z))| {
+            let direction = HorizontalDirection::new(-x, -z);
+            Tank::on_terrain(
+                terrain,
+                owner,
+                HorizontalPosition { x, z },
+                direction,
+                direction,
+            )
+        })
+        .collect()
+}
 
-    [
-        Tank::on_terrain(
-            terrain,
-            PlayerId::One,
-            HorizontalPosition { x: -12.0, z: -8.0 },
-            player_one_direction,
-            player_one_direction,
-        ),
-        Tank::on_terrain(
-            terrain,
-            PlayerId::Two,
-            HorizontalPosition { x: 12.0, z: 8.0 },
-            player_two_direction,
-            player_two_direction,
-        ),
-    ]
+/// Compatibility helper for existing two-player-focused domain tests.
+#[cfg(test)]
+pub fn initial_tanks(terrain: &BattlefieldTerrain) -> [Tank; 2] {
+    initial_tanks_for_players(terrain, &[PlayerId::One, PlayerId::Two])
+        .try_into()
+        .expect("two requested player IDs must produce two tanks")
 }
 
 #[cfg(test)]
