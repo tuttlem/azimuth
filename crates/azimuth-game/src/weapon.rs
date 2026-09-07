@@ -1,12 +1,18 @@
-use crate::{battlefield::Crater, projectile::Projectile, tank::PlayerId};
+use crate::{
+    battlefield::Crater,
+    projectile::{Projectile, WindResponse},
+    tank::PlayerId,
+};
 
 pub const HIGH_EXPLOSIVE_STARTING_ROUNDS: u8 = 2;
+pub const HEAVY_SHELL_STARTING_ROUNDS: u8 = 2;
 
 /// Stable gameplay identity. Display names and inventory storage order are never identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum WeaponId {
     BasicShell,
     HighExplosive,
+    HeavyShell,
     #[cfg(test)]
     TestConventional,
 }
@@ -18,12 +24,22 @@ pub enum AmmunitionRule {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct ProjectileProfile;
+pub struct ProjectileProfile {
+    pub wind_response: WindResponse,
+}
 
 /// Ordinary projectile differences are deliberately empty today: both first weapons use the
 /// existing ballistic launch, gravity, and wind model. A real future conventional difference can
 /// earn a field here without disturbing impact state.
-pub const STANDARD_BALLISTIC_PROJECTILE: ProjectileProfile = ProjectileProfile;
+pub const STANDARD_BALLISTIC_PROJECTILE: ProjectileProfile = ProjectileProfile {
+    wind_response: WindResponse::NORMAL,
+};
+
+pub fn heavy_shell_projectile() -> ProjectileProfile {
+    ProjectileProfile {
+        wind_response: WindResponse::new(0.4).expect("heavy shell wind response must be valid"),
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ImpactProfile {
@@ -88,6 +104,18 @@ pub fn weapon_definition(id: WeaponId) -> WeaponDefinition {
                 explosion_visual_scale: 1.5,
             },
         ),
+        WeaponId::HeavyShell => WeaponDefinition::new(
+            WeaponId::HeavyShell,
+            "HEAVY SHELL",
+            AmmunitionRule::Limited(HEAVY_SHELL_STARTING_ROUNDS),
+            heavy_shell_projectile(),
+            ImpactProfile {
+                damage_radius: 6.0,
+                maximum_damage: 40,
+                crater: Crater::new(4.0, 1.8).expect("heavy shell crater must be valid"),
+                explosion_visual_scale: 1.0,
+            },
+        ),
         #[cfg(test)]
         WeaponId::TestConventional => test_conventional_definition(),
     }
@@ -131,6 +159,7 @@ pub struct PlayerWeaponLoadout {
     selected: WeaponId,
     basic_shell: WeaponAvailability,
     high_explosive: WeaponAvailability,
+    heavy_shell: WeaponAvailability,
 }
 
 impl Default for PlayerWeaponLoadout {
@@ -142,6 +171,9 @@ impl Default for PlayerWeaponLoadout {
             ),
             high_explosive: WeaponAvailability::from_rule(
                 weapon_definition(WeaponId::HighExplosive).ammunition,
+            ),
+            heavy_shell: WeaponAvailability::from_rule(
+                weapon_definition(WeaponId::HeavyShell).ammunition,
             ),
         }
     }
@@ -156,6 +188,7 @@ impl PlayerWeaponLoadout {
         match weapon {
             WeaponId::BasicShell => self.basic_shell,
             WeaponId::HighExplosive => self.high_explosive,
+            WeaponId::HeavyShell => self.heavy_shell,
             #[cfg(test)]
             WeaponId::TestConventional => WeaponAvailability::Unlimited,
         }
@@ -176,6 +209,7 @@ impl PlayerWeaponLoadout {
         let availability = match selected {
             WeaponId::BasicShell => &mut self.basic_shell,
             WeaponId::HighExplosive => &mut self.high_explosive,
+            WeaponId::HeavyShell => &mut self.heavy_shell,
             #[cfg(test)]
             WeaponId::TestConventional => return None,
         };
@@ -234,7 +268,10 @@ pub fn test_conventional_definition() -> WeaponDefinition {
         WeaponId::TestConventional,
         "TEST CONVENTIONAL",
         AmmunitionRule::Limited(1),
-        STANDARD_BALLISTIC_PROJECTILE,
+        ProjectileProfile {
+            wind_response: WindResponse::new(0.7)
+                .expect("test conventional wind response must be valid"),
+        },
         ImpactProfile {
             damage_radius: 5.0,
             maximum_damage: 25,
@@ -297,8 +334,9 @@ mod tests {
     #[test]
     fn fired_shot_copies_the_profile_not_the_later_loadout() {
         let mut loadout = PlayerWeaponLoadout::default();
-        loadout.select(WeaponId::HighExplosive);
-        let projectile = Projectile::launch(
+        loadout.select(WeaponId::HeavyShell);
+        let definition = loadout.commit_selected().unwrap();
+        let projectile = Projectile::launch_with_wind_response(
             crate::projectile::ShotParameters::new(
                 WorldPosition {
                     x: 0.0,
@@ -310,11 +348,13 @@ mod tests {
                 10.0,
             )
             .unwrap(),
+            definition.projectile.wind_response,
         );
-        let shot = FiredShot::new(loadout.commit_selected().unwrap(), projectile);
+        let shot = FiredShot::new(definition, projectile);
         loadout.select(WeaponId::BasicShell);
-        assert_eq!(shot.weapon, WeaponId::HighExplosive);
-        assert_eq!(shot.impact.damage_radius, 8.0);
+        assert_eq!(shot.weapon, WeaponId::HeavyShell);
+        assert_eq!(shot.impact.damage_radius, 6.0);
+        assert_eq!(shot.projectile.wind_response().factor(), 0.4);
     }
 
     #[test]
@@ -337,5 +377,55 @@ mod tests {
         let shot = FiredShot::new(definition, projectile);
         assert_eq!(shot.weapon, WeaponId::TestConventional);
         assert_eq!(shot.impact, definition.impact);
+        assert_eq!(definition.projectile.wind_response.factor(), 0.7);
+    }
+
+    #[test]
+    fn heavy_shell_is_limited_wind_resistant_and_independent_per_player() {
+        let basic = weapon_definition(WeaponId::BasicShell);
+        let heavy = weapon_definition(WeaponId::HeavyShell);
+        assert_eq!(heavy.display_name, "HEAVY SHELL");
+        assert_eq!(heavy.ammunition, AmmunitionRule::Limited(2));
+        assert_eq!(heavy.projectile.wind_response.factor(), 0.4);
+        assert_eq!(basic.projectile.wind_response, WindResponse::NORMAL);
+        assert_eq!(heavy.impact, basic.impact);
+
+        let projectile = Projectile::launch_with_wind_response(
+            crate::projectile::ShotParameters::new(
+                WorldPosition {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                0.0,
+                45.0,
+                10.0,
+            )
+            .unwrap(),
+            heavy.projectile.wind_response,
+        );
+        assert_eq!(projectile.wind_response(), heavy.projectile.wind_response);
+
+        let mut loadouts = PlayerWeaponLoadouts::default();
+        let player_one = loadouts.for_player_mut(PlayerId::One);
+        assert_eq!(
+            player_one.availability(WeaponId::HeavyShell),
+            WeaponAvailability::Remaining(2)
+        );
+        assert!(player_one.select(WeaponId::HeavyShell));
+        assert_eq!(
+            player_one.commit_selected().unwrap().id,
+            WeaponId::HeavyShell
+        );
+        assert_eq!(
+            player_one.availability(WeaponId::HeavyShell),
+            WeaponAvailability::Remaining(1)
+        );
+        assert_eq!(
+            loadouts
+                .for_player(PlayerId::Two)
+                .availability(WeaponId::HeavyShell),
+            WeaponAvailability::Remaining(2)
+        );
     }
 }

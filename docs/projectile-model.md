@@ -9,8 +9,10 @@ not a model of real-world Earth.
 Simulation advances in fixed 1/120-second steps. Rendering can run faster or slower without
 changing the sequence of simulation states for the same shot and number of steps.
 
-For each step, acceleration is the sum of gravity `(0, -gravity, 0)` and wind `(wind_x, 0,
-wind_z)`. Wind means the horizontal direction it pushes a projectile **toward**. The projectile
+For each step, acceleration is the sum of gravity `(0, -gravity, 0)` and the projectile's captured
+wind response multiplied by match wind `(wind_x, 0, wind_z)`. Wind means the horizontal direction
+it pushes a projectile **toward**. Basic Shell and High Explosive use response `1.0`; Heavy Shell
+uses `0.40`, so it still drifts in wind but by 40% of the normal wind contribution. The projectile
 uses the current velocity to update position with the constant-acceleration term, then updates
 velocity:
 
@@ -19,10 +21,10 @@ position = position + velocity * dt + 0.5 * acceleration * dt²
 velocity = velocity + acceleration * dt
 ```
 
-With calm wind, this is exactly the original gravity-only motion. With wind, horizontal influence
-accumulates with airtime, so high and long shots drift more. There is no vertical wind, drag,
-mass, or atmospheric model; vertical motion remains gravity's responsibility. The swept terrain
-test uses this same wind-altered segment.
+With calm wind, wind response produces no trajectory difference. With wind, horizontal influence
+accumulates with airtime, so high and long shots drift more. Wind response is an explicit gameplay
+multiplier, not projectile mass, drag, or an atmospheric model; vertical motion remains gravity's
+responsibility. The swept terrain test uses this same wind-altered segment.
 
 ## Terrain Impact
 
@@ -82,11 +84,13 @@ wraps from 0 through less than 360 degrees; elevation clamps to 5–85 degrees; 
 clamps to 8–30 units per second.
 
 Each player selects a conventional weapon only during a choosing turn: `1` selects unlimited Basic
-Shell and `2` selects High Explosive when a round remains. Press Space commits that weapon and
-fires the current player's state from that player's current barrel-end firing origin. Basic Shell
-uses the established 6-unit / 40-damage blast and 4-unit / 1.8-depth crater. High Explosive has
-two rounds per player and uses the same flight but an 8-unit / 60-damage blast and 6-unit /
-3-depth crater. Its final round returns the player's selection to Basic Shell.
+Shell, `2` selects High Explosive when a round remains, and `3` selects Heavy Shell when a round
+remains. Press Space commits that weapon and fires the current player's state from that player's
+current barrel-end firing origin. Basic Shell uses the established 6-unit / 40-damage blast and
+4-unit / 1.8-depth crater. High Explosive has two rounds per player and uses the same flight but an
+8-unit / 60-damage blast and 6-unit / 3-depth crater. Heavy Shell has two rounds per player, the
+Basic Shell impact profile, and a captured 0.40 wind response. A finite weapon's final round
+returns the player's selection to Basic Shell.
 
 The existing shot-parameter conversion is the only azimuth/elevation/velocity-to-launch-vector
 calculation. The HUD and placeholder barrel derive from the same state. While the one projectile
@@ -104,10 +108,10 @@ player-visible power value.
 ## Intentional Boundary
 
 The projectile is rendered as a simple sphere driven entirely by simulation state. It has no mass,
-drag, vertical wind, changing weather, weapon-specific wind response, or aim assistance. Wind
-does not push tanks, terrain, explosions, or the camera. It stops at terrain impact or ends when it
-leaves the documented simulation volume or reaches its 20-second simulated lifetime. A small
-removable development marker shows the latest terrain-impact position; it does not affect
-simulation.
+drag, vertical wind, changing weather, or aim assistance. Its limited supported weapon-specific
+property is captured horizontal wind response. Wind does not push tanks, terrain, explosions, or
+the camera. It stops at terrain impact or ends when it leaves the documented simulation volume or
+reaches its 20-second simulated lifetime. A small removable development marker shows the latest
+terrain-impact position; it does not affect simulation.
 
 Shot-angle and launch-origin conventions are defined in [world-conventions.md](world-conventions.md).

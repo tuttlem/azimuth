@@ -445,7 +445,8 @@ fn launch_aimed_projectile(
     };
     let tank = tank_for_player(tanks.0, player);
     let parameters = launch_parameters_for_aim(tank, aiming);
-    let projectile = Projectile::launch(parameters);
+    let projectile =
+        Projectile::launch_with_wind_response(parameters, definition.projectile.wind_response);
     let shot = FiredShot::new(definition, projectile);
 
     commands.spawn((
@@ -476,6 +477,8 @@ fn select_weapon_input(
         Some(WeaponId::BasicShell)
     } else if keyboard.just_pressed(KeyCode::Digit2) {
         Some(WeaponId::HighExplosive)
+    } else if keyboard.just_pressed(KeyCode::Digit3) {
+        Some(WeaponId::HeavyShell)
     } else {
         None
     };
@@ -1095,7 +1098,7 @@ fn hud_field_text(field: HudTextField, view: TacticalHudView) -> String {
         }),
         HudTextField::Controls => match view.action {
             HudAction::Choose => {
-                "1 BASIC | 2 HE | M MOVE | SPACE FIRE\nARROWS AIM | -/= POWER".into()
+                "1 BASIC | 2 HE | 3 HEAVY | M MOVE | SPACE FIRE\nARROWS AIM | -/= POWER".into()
             }
             HudAction::Moving => "ARROWS MOVE (CAMERA) | ENTER END".into(),
             HudAction::Resolving | HudAction::Finished => String::new(),
@@ -1859,12 +1862,27 @@ mod tests {
         );
         assert_eq!(
             hud_field_text(HudTextField::Controls, view),
-            "1 BASIC | 2 HE | M MOVE | SPACE FIRE\nARROWS AIM | -/= POWER"
+            "1 BASIC | 2 HE | 3 HEAVY | M MOVE | SPACE FIRE\nARROWS AIM | -/= POWER"
+        );
+
+        assert!(
+            weapons
+                .for_player_mut(PlayerId::One)
+                .select(WeaponId::HeavyShell)
+        );
+        let heavy_view = tactical_hud_view(turn, tanks, weapons, wind, None);
+        assert_eq!(
+            heavy_view.weapon,
+            Some((WeaponId::HeavyShell, WeaponAvailability::Remaining(2)))
+        );
+        assert_eq!(
+            hud_field_text(HudTextField::Weapon, heavy_view),
+            "HEAVY SHELL: x2"
         );
     }
 
     #[test]
-    fn high_explosive_uses_the_common_resolver_with_larger_damage_and_crater_profiles() {
+    fn conventional_weapons_use_the_common_resolver_with_their_captured_impact_profiles() {
         let impact_position = WorldPosition {
             x: 0.0,
             y: 0.0,
@@ -1889,6 +1907,30 @@ mod tests {
             &mut basic_latest_impact,
             &mut basic_turn,
         );
+
+        let mut heavy_terrain = BattlefieldTerrain::initial();
+        let mut heavy_tanks = initial_tanks(&heavy_terrain);
+        heavy_tanks[0].pose.position = impact_position;
+        let mut heavy_turn = initial_turn_state(heavy_tanks);
+        let mut heavy_latest_impact = LatestTerrainImpact::default();
+        assert!(heavy_turn.begin_fire().is_some());
+        resolve_projectile_advance(
+            FiredShot::new(weapon_definition(WeaponId::HeavyShell), projectile),
+            ProjectileAdvance::TerrainImpact(TerrainImpact {
+                position: impact_position,
+            }),
+            &mut heavy_terrain,
+            &mut heavy_tanks,
+            &mut heavy_latest_impact,
+            &mut heavy_turn,
+        );
+        assert_eq!(heavy_tanks[0].health, basic_tanks[0].health);
+        assert_eq!(
+            heavy_terrain.height(0.0, 0.0),
+            basic_terrain.height(0.0, 0.0)
+        );
+        assert_eq!(heavy_latest_impact.explosion_visual_scale, 1.0);
+        assert!(heavy_tanks[0].is_settling());
 
         let mut he_terrain = BattlefieldTerrain::initial();
         let mut he_tanks = initial_tanks(&he_terrain);

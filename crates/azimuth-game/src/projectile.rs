@@ -110,6 +110,28 @@ pub struct Wind {
     horizontal_acceleration: WorldVector,
 }
 
+/// A projectile-specific multiplier for the match's horizontal wind acceleration.
+///
+/// This is a deliberate gameplay value, not mass or an aerodynamic coefficient. Keeping it on
+/// the projectile snapshots wind behaviour when a shot is committed, while gravity stays shared.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WindResponse(f32);
+
+impl WindResponse {
+    pub const NORMAL: Self = Self(1.0);
+
+    pub fn new(factor: f32) -> Result<Self, ProjectileParameterError> {
+        if !factor.is_finite() || factor < 0.0 {
+            return Err(ProjectileParameterError::WindResponse);
+        }
+        Ok(Self(factor))
+    }
+
+    pub fn factor(self) -> f32 {
+        self.0
+    }
+}
+
 impl Wind {
     pub fn new(horizontal_acceleration: WorldVector) -> Result<Self, ProjectileParameterError> {
         if !horizontal_acceleration.x.is_finite()
@@ -165,6 +187,7 @@ impl SimulationLimits {
 pub struct Projectile {
     pub position: WorldPosition,
     pub velocity: WorldVector,
+    wind_response: WindResponse,
     elapsed_steps: u32,
 }
 
@@ -181,12 +204,26 @@ pub enum ProjectileAdvance {
 }
 
 impl Projectile {
+    #[cfg(test)]
     pub fn launch(parameters: ShotParameters) -> Self {
+        Self::launch_with_wind_response(parameters, WindResponse::NORMAL)
+    }
+
+    pub fn launch_with_wind_response(
+        parameters: ShotParameters,
+        wind_response: WindResponse,
+    ) -> Self {
         Self {
             position: parameters.launch_position,
             velocity: parameters.launch_velocity(),
+            wind_response,
             elapsed_steps: 0,
         }
+    }
+
+    #[cfg(test)]
+    pub fn wind_response(self) -> WindResponse {
+        self.wind_response
     }
 
     pub fn elapsed_seconds(self) -> f32 {
@@ -207,7 +244,10 @@ impl Projectile {
         F: Fn(f32, f32) -> Option<f32>,
     {
         let previous_position = self.position;
-        let acceleration = gravity.acceleration().added(wind.horizontal_acceleration());
+        let acceleration = gravity.acceleration().added(
+            wind.horizontal_acceleration()
+                .scaled(self.wind_response.factor()),
+        );
         let step = FIXED_STEP_SECONDS;
         let displacement = self
             .velocity
@@ -291,6 +331,7 @@ pub enum ProjectileParameterError {
     LaunchSpeed,
     Gravity,
     Wind,
+    WindResponse,
     HorizontalDirection,
 }
 
@@ -765,6 +806,7 @@ mod tests {
                 z: 0.0,
             },
             velocity: WorldVector::ZERO,
+            wind_response: WindResponse::NORMAL,
             elapsed_steps: 0,
         };
         assert!(advance_without_terrain(
@@ -783,6 +825,7 @@ mod tests {
                 x: 1.0,
                 ..WorldVector::ZERO
             },
+            wind_response: WindResponse::NORMAL,
             elapsed_steps: 0,
         };
         assert!(!advance_without_terrain(
@@ -859,6 +902,7 @@ mod tests {
                 y: -240.0,
                 ..WorldVector::ZERO
             },
+            wind_response: WindResponse::NORMAL,
             elapsed_steps: 0,
         };
 
@@ -891,6 +935,7 @@ mod tests {
                 y: -240.0,
                 ..WorldVector::ZERO
             },
+            wind_response: WindResponse::NORMAL,
             elapsed_steps: 0,
         };
 
@@ -918,6 +963,7 @@ mod tests {
                 y: -12_000.0,
                 ..WorldVector::ZERO
             },
+            wind_response: WindResponse::NORMAL,
             elapsed_steps: 0,
         };
 
@@ -945,6 +991,7 @@ mod tests {
                 y: -300.0,
                 z: 60.0,
             },
+            wind_response: WindResponse::NORMAL,
             elapsed_steps: 0,
         };
 
@@ -978,6 +1025,7 @@ mod tests {
                     y: -240.0,
                     ..WorldVector::ZERO
                 },
+                wind_response: WindResponse::NORMAL,
                 elapsed_steps: 0,
             };
             let mut second = first;
@@ -1008,6 +1056,7 @@ mod tests {
                 x: 1.0,
                 ..WorldVector::ZERO
             },
+            wind_response: WindResponse::NORMAL,
             elapsed_steps: 0,
         };
 
@@ -1116,6 +1165,7 @@ mod tests {
                 y: -1.0,
                 ..WorldVector::ZERO
             },
+            wind_response: WindResponse::NORMAL,
             elapsed_steps: 0,
         };
         assert_eq!(
@@ -1152,6 +1202,7 @@ mod tests {
                 y: -240.0,
                 ..WorldVector::ZERO
             },
+            wind_response: WindResponse::NORMAL,
             elapsed_steps: 0,
         };
         assert!(matches!(
@@ -1164,5 +1215,100 @@ mod tests {
             ProjectileAdvance::TerrainImpact(_)
         ));
         assert_close(projectile.position.y, new_height);
+    }
+
+    #[test]
+    fn wind_response_scales_every_horizontal_direction_without_changing_gravity() {
+        let gravity = Gravity::new(8.0).unwrap();
+        let response = WindResponse::new(0.4).unwrap();
+        let winds = [
+            WorldVector {
+                x: 1.5,
+                y: 0.0,
+                z: 0.0,
+            },
+            WorldVector {
+                x: -1.5,
+                y: 0.0,
+                z: 0.0,
+            },
+            WorldVector {
+                x: 0.0,
+                y: 0.0,
+                z: -1.5,
+            },
+            WorldVector {
+                x: 0.0,
+                y: 0.0,
+                z: 1.5,
+            },
+        ];
+
+        for vector in winds {
+            let wind = Wind::new(vector).unwrap();
+            let mut normal = launch(0.0, 45.0, 10.0);
+            let mut calm = normal;
+            let mut reduced = Projectile::launch_with_wind_response(
+                ShotParameters::new(normal.position, 0.0, 45.0, 10.0).unwrap(),
+                response,
+            );
+            for _ in 0..120 {
+                assert!(matches!(
+                    normal.advance_with_terrain(gravity, wind, generous_limits(), no_terrain),
+                    ProjectileAdvance::Active
+                ));
+                assert!(matches!(
+                    calm.advance_with_terrain(gravity, calm_wind(), generous_limits(), no_terrain),
+                    ProjectileAdvance::Active
+                ));
+                assert!(matches!(
+                    reduced.advance_with_terrain(gravity, wind, generous_limits(), no_terrain),
+                    ProjectileAdvance::Active
+                ));
+            }
+            assert_close(
+                reduced.position.x - calm.position.x,
+                (normal.position.x - calm.position.x) * 0.4,
+            );
+            assert_close(
+                reduced.position.z - calm.position.z,
+                (normal.position.z - calm.position.z) * 0.4,
+            );
+            assert_close(reduced.position.y, normal.position.y);
+            assert_close(reduced.velocity.y, normal.velocity.y);
+        }
+    }
+
+    #[test]
+    fn wind_response_is_validated_and_zero_wind_is_invariant() {
+        assert_eq!(
+            WindResponse::new(-0.1),
+            Err(ProjectileParameterError::WindResponse)
+        );
+        assert_eq!(
+            WindResponse::new(f32::NAN),
+            Err(ProjectileParameterError::WindResponse)
+        );
+        let mut normal = launch(0.0, 45.0, 10.0);
+        let mut reduced = Projectile::launch_with_wind_response(
+            ShotParameters::new(normal.position, 0.0, 45.0, 10.0).unwrap(),
+            WindResponse::new(0.4).unwrap(),
+        );
+        for _ in 0..120 {
+            normal.advance_with_terrain(
+                Gravity::new(8.0).unwrap(),
+                calm_wind(),
+                generous_limits(),
+                no_terrain,
+            );
+            reduced.advance_with_terrain(
+                Gravity::new(8.0).unwrap(),
+                calm_wind(),
+                generous_limits(),
+                no_terrain,
+            );
+        }
+        assert_eq!(normal.position, reduced.position);
+        assert_eq!(normal.velocity, reduced.velocity);
     }
 }

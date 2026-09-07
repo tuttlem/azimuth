@@ -536,7 +536,12 @@ Every weapon should create a meaningful gameplay difference.
 * [x] High-explosive shell.
 * [ ] Large-radius explosive.
 * [ ] Small precise projectile.
-* [ ] Heavy projectile with reduced wind sensitivity.
+* [x] Heavy projectile with reduced wind sensitivity.
+
+Heavy Shell has a two-round conventional implementation with a 0.40 horizontal wind-response
+multiplier and Basic Shell-class impact profile. Deterministic comparison coverage confirms reduced,
+non-zero response in every horizontal direction, and manual validation confirmed that its
+wind-resistance is visible and useful without making it wind-immune.
 
 ## Cluster / Multi-Projectile Weapons
 
@@ -802,6 +807,10 @@ Watching the shot is part of the game.
 ## Projectile Camera
 
 * [ ] Track projectile in flight.
+* [ ] Add a golf-style shot camera: follow the fired projectile from a comfortable offset through
+  landing so players can read arc and wind drift; at its apex, smoothly widen to include all living
+  players and the likely impact area, then frame the explosion and its aftermath without changing
+  authoritative simulation or turn timing.
 * [ ] Maintain awareness of surrounding terrain.
 * [x] Pull back to a readable general battlefield view when a projectile launches.
 * [ ] Transition naturally toward impact.
