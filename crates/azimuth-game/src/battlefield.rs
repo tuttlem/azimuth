@@ -3,6 +3,9 @@ use crate::world::WorldPosition;
 /// One large default battlefield. At maximum 45-degree power, ordinary shells can still cross
 /// most of this width; a larger map would make normal artillery engagement needlessly rare.
 pub const HALF_EXTENT: f32 = 60.0;
+/// A coarse, render-only skirt reaches far enough to conceal the playable square's edge without
+/// changing the 120-unit gameplay world or multiplying the mutable terrain mesh.
+pub const HORIZON_HALF_EXTENT: f32 = 180.0;
 /// Physical scale and sample density are deliberately separate. This keeps existing craters and
 /// one-unit positioning readable without multiplying mesh density with the map's area.
 pub const TERRAIN_CELLS_PER_SIDE: usize = 64;
@@ -20,6 +23,73 @@ pub struct BuildingPlacement {
     pub depth: f32,
     pub height: f32,
     pub yaw_radians: f32,
+}
+
+/// Immutable exterior scenery data. It deliberately offers mesh data only: gameplay must continue
+/// to query, collide with, and deform `BattlefieldTerrain` inside `HALF_EXTENT`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct VisualHorizon {
+    positions: Vec<[f32; 3]>,
+    colours: Vec<[f32; 4]>,
+    indices: Vec<u32>,
+}
+
+impl VisualHorizon {
+    const SEGMENTS_PER_EDGE: usize = 16;
+    const RADIAL_STEPS: usize = 4;
+
+    pub fn from_terrain(terrain: &BattlefieldTerrain, seed: BattlefieldSeed) -> Self {
+        let inner = square_perimeter(HALF_EXTENT, Self::SEGMENTS_PER_EDGE);
+        let outer = square_perimeter(HORIZON_HALF_EXTENT, Self::SEGMENTS_PER_EDGE);
+        let ring_len = inner.len();
+        let mut positions = Vec::with_capacity(ring_len * (Self::RADIAL_STEPS + 1));
+        let mut colours = Vec::with_capacity(positions.capacity());
+        for ring in 0..=Self::RADIAL_STEPS {
+            let fraction = ring as f32 / Self::RADIAL_STEPS as f32;
+            for ((inner_x, inner_z), (outer_x, outer_z)) in inner.iter().zip(&outer) {
+                let x = inner_x + (outer_x - inner_x) * fraction;
+                let z = inner_z + (outer_z - inner_z) * fraction;
+                let inner_height = terrain.height(*inner_x, *inner_z);
+                let outer_height = generated_height(*outer_x, *outer_z, seed);
+                let height = inner_height + (outer_height - inner_height) * fraction;
+                positions.push([x, height, z]);
+                colours.push(elevation_colour(height));
+            }
+        }
+        let mut indices = Vec::with_capacity(ring_len * Self::RADIAL_STEPS * 6);
+        for ring in 0..Self::RADIAL_STEPS {
+            let base = ring * ring_len;
+            let outer_base = base + ring_len;
+            for index in 0..ring_len {
+                let next = (index + 1) % ring_len;
+                indices.extend_from_slice(&[
+                    (base + index) as u32,
+                    (base + next) as u32,
+                    (outer_base + index) as u32,
+                    (outer_base + index) as u32,
+                    (base + next) as u32,
+                    (outer_base + next) as u32,
+                ]);
+            }
+        }
+        Self {
+            positions,
+            colours,
+            indices,
+        }
+    }
+
+    pub fn positions(&self) -> &[[f32; 3]] {
+        &self.positions
+    }
+
+    pub fn colours(&self) -> &[[f32; 4]] {
+        &self.colours
+    }
+
+    pub fn indices(&self) -> &[u32] {
+        &self.indices
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -305,6 +375,24 @@ pub fn terrain_mesh_indices() -> Vec<u32> {
     indices
 }
 
+fn square_perimeter(half_extent: f32, segments_per_edge: usize) -> Vec<(f32, f32)> {
+    let step = half_extent * 2.0 / segments_per_edge as f32;
+    let mut points = Vec::with_capacity(segments_per_edge * 4);
+    for index in 0..segments_per_edge {
+        points.push((-half_extent + index as f32 * step, -half_extent));
+    }
+    for index in 0..segments_per_edge {
+        points.push((half_extent, -half_extent + index as f32 * step));
+    }
+    for index in 0..segments_per_edge {
+        points.push((half_extent - index as f32 * step, half_extent));
+    }
+    for index in 0..segments_per_edge {
+        points.push((-half_extent, half_extent - index as f32 * step));
+    }
+    points
+}
+
 fn generated_height(x: f32, z: f32, seed: BattlefieldSeed) -> f32 {
     let mut random = seed.0;
     let mountain_x = random_range(&mut random, -42.0, -24.0);
@@ -375,6 +463,46 @@ mod tests {
             y: 0.0,
             z: 0.0,
         }
+    }
+
+    #[test]
+    fn visual_horizon_welds_to_the_authoritative_edge_without_expanding_it() {
+        let terrain = BattlefieldTerrain::generated(BattlefieldSeed(73));
+        let before = terrain.clone();
+        let horizon = VisualHorizon::from_terrain(&terrain, BattlefieldSeed(73));
+        let positions = horizon.positions();
+        let colours = horizon.colours();
+        let ring_len = VisualHorizon::SEGMENTS_PER_EDGE * 4;
+
+        assert_eq!(
+            positions.len(),
+            ring_len * (VisualHorizon::RADIAL_STEPS + 1)
+        );
+        assert_eq!(colours.len(), positions.len());
+        assert_eq!(
+            horizon.indices().len(),
+            ring_len * VisualHorizon::RADIAL_STEPS * 6
+        );
+        for (position, colour) in positions[..ring_len].iter().zip(&colours[..ring_len]) {
+            assert!(is_within_bounds(position[0], position[2]));
+            close(position[1], terrain.height(position[0], position[2]));
+            assert_eq!(*colour, elevation_colour(position[1]));
+        }
+        assert!(positions[ring_len..].iter().all(|position| {
+            position.iter().all(|value| value.is_finite())
+                && (position[0].abs() >= HALF_EXTENT || position[2].abs() >= HALF_EXTENT)
+        }));
+        assert!(
+            positions[ring_len..]
+                .iter()
+                .any(|position| position[0].abs() == HORIZON_HALF_EXTENT)
+        );
+        assert_eq!(terrain, before);
+        assert!(!is_within_bounds(HALF_EXTENT + 0.1, 0.0));
+        assert_eq!(
+            terrain.height_if_within_bounds(HALF_EXTENT + 0.1, 0.0),
+            None
+        );
     }
 
     #[test]

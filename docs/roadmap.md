@@ -875,6 +875,13 @@ non-conflicting panning control remain separate work.
 * [ ] Environmental summary.
 * [x] Weapon inventory.
 
+Implementation note (2026-09-09): the player panel now derives all 2–8 ordered configured
+participants, including configured names, health, elimination, and active-turn indication. A
+lightweight presentation-only sky, cloud, and horizon treatment also now masks the finite
+battlefield edge without changing terrain authority. Automated coverage and a two-player graphical
+smoke run pass; complete the recorded 2-, 4-, and 8-player manual acceptance before claiming the
+remaining HUD usability work complete.
+
 ## Usability
 
 * [x] Keyboard controls.

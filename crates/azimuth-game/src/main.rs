@@ -8,13 +8,12 @@ mod turn;
 mod weapon;
 mod world;
 
-use std::f32::consts::FRAC_PI_2;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aiming::{AimAdjustment, AimingState};
 use battlefield::{
-    BattlefieldSeed, BattlefieldTerrain, BuildingPlacement, HALF_EXTENT, WATER_TABLE,
-    generate_buildings, terrain_mesh_indices,
+    BattlefieldSeed, BattlefieldTerrain, BuildingPlacement, HALF_EXTENT, VisualHorizon,
+    WATER_TABLE, generate_buildings, terrain_mesh_indices,
 };
 use bevy::{
     asset::RenderAssetUsages,
@@ -24,7 +23,7 @@ use bevy::{
     render::render_resource::PrimitiveTopology,
 };
 use combat::resolve_explosion;
-use match_setup::{ControllerType, MatchConfiguration};
+use match_setup::{ControllerType, MatchConfiguration, PlayerConfiguration};
 use projectile::{
     Gravity, Projectile, ProjectileAdvance, SimulationLimits, TerrainImpact, Wind,
     azimuth_from_horizontal_direction,
@@ -41,7 +40,10 @@ const CAMERA_MIN_DISTANCE: f32 = 8.0;
 const CAMERA_MAX_DISTANCE: f32 = 150.0;
 const CAMERA_ORBIT_SENSITIVITY: f32 = 0.005;
 const CAMERA_ZOOM_SPEED: f32 = 2.0;
-const CAMERA_PITCH_LIMIT: f32 = FRAC_PI_2 - 0.1;
+const CAMERA_MIN_PITCH: f32 = -std::f32::consts::FRAC_PI_2 + 0.1;
+// Normal tactical poses already look down. Keeping the upper limit below horizontal avoids views
+// from beneath the single-sided battlefield mesh without changing camera controls or intent.
+const CAMERA_MAX_PITCH: f32 = -0.08;
 const CAMERA_TRANSITION_SPEED: f32 = 5.0;
 const ACTIVE_PLAYER_CAMERA_DISTANCE: f32 = 16.0;
 const ACTIVE_PLAYER_CAMERA_HEIGHT: f32 = 1.8;
@@ -206,6 +208,9 @@ struct ImpactMarker;
 struct BattlefieldVisual;
 
 #[derive(Component)]
+struct HorizonVisual;
+
+#[derive(Component)]
 struct WaterVisual;
 
 #[derive(Component)]
@@ -242,6 +247,12 @@ struct HudText(HudTextField);
 struct HudHealthFill(PlayerId);
 
 #[derive(Component)]
+struct HudScoreboardText(PlayerId);
+
+#[derive(Component)]
+struct HudScoreboardRow(PlayerId);
+
+#[derive(Component)]
 struct HudWindMarker;
 
 #[derive(Component)]
@@ -250,8 +261,6 @@ struct HudActivePlayerPanel;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HudTextField {
     Match,
-    PlayerOneHealth,
-    PlayerTwoHealth,
     Aim,
     Weapon,
     Wind,
@@ -267,19 +276,25 @@ enum HudAction {
     Finished,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 struct TacticalHudView {
     active_player: Option<PlayerId>,
     action: HudAction,
-    player_one_health: u8,
-    player_two_health: u8,
-    player_one_eliminated: bool,
-    player_two_eliminated: bool,
+    scoreboard: Vec<ScoreboardEntry>,
     aim: Option<AimingState>,
     weapon: Option<(WeaponId, WeaponAvailability)>,
     wind: Wind,
     movement: Option<(u8, Option<MovementRejection>)>,
     result: MatchState,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct ScoreboardEntry {
+    player: PlayerId,
+    display_name: String,
+    health: u8,
+    eliminated: bool,
+    active: bool,
 }
 
 type TankTurretTransforms<'w, 's> = Query<
@@ -303,7 +318,7 @@ type HudDecorations<'w, 's> = Query<
         Option<&'static mut BorderColor>,
         Option<&'static HudActivePlayerPanel>,
     ),
-    Without<HudHealthFill>,
+    (Without<HudHealthFill>, Without<HudScoreboardRow>),
 >;
 type TankMuzzleTransforms<'w, 's> = Query<
     'w,
@@ -311,6 +326,14 @@ type TankMuzzleTransforms<'w, 's> = Query<
     (&'static TankMuzzle, &'static mut Transform),
     (Without<TankTurret>, Without<TankBarrel>),
 >;
+type BattlefieldSceneResources<'w> = (
+    Res<'w, Tanks>,
+    Res<'w, CurrentTurn>,
+    Res<'w, BattlefieldState>,
+    Res<'w, WorldDressing>,
+    Res<'w, MatchSeed>,
+    Res<'w, PendingMatchConfiguration>,
+);
 
 impl Default for BattlefieldCamera {
     fn default() -> Self {
@@ -344,6 +367,7 @@ fn main() {
     let turn = initial_turn_state(&tanks);
     App::new()
         .add_plugins(DefaultPlugins)
+        .insert_resource(ClearColor(sky_colour()))
         .insert_resource(Tanks(tanks))
         .insert_resource(CurrentTurn(turn))
         .insert_resource(BattlefieldState(terrain))
@@ -396,11 +420,9 @@ fn spawn_battlefield_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
-    tanks: Res<Tanks>,
-    turn: Res<CurrentTurn>,
-    terrain: Res<BattlefieldState>,
-    dressing: Res<WorldDressing>,
+    scene: BattlefieldSceneResources,
 ) {
+    let (tanks, turn, terrain, dressing, match_seed, configuration) = scene;
     let camera = BattlefieldCamera::default();
     let transform = camera_transform(&camera);
     commands.spawn((
@@ -418,6 +440,19 @@ fn spawn_battlefield_scene(
         Mesh3d(meshes.add(create_battlefield_mesh(&terrain.0))),
         MeshMaterial3d(materials.add(Color::WHITE)),
     ));
+
+    commands.spawn((
+        HorizonVisual,
+        Mesh3d(meshes.add(create_horizon_mesh(&VisualHorizon::from_terrain(
+            &terrain.0,
+            BattlefieldSeed(derived_seed(match_seed.0, "terrain")),
+        )))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            unlit: true,
+            ..default()
+        })),
+    ));
+    spawn_clouds(&mut commands, &mut meshes, &mut materials);
 
     commands.spawn((
         WaterVisual,
@@ -479,7 +514,7 @@ fn spawn_battlefield_scene(
         );
     }
 
-    spawn_tactical_hud(&mut commands);
+    spawn_tactical_hud(&mut commands, &configuration.0.players);
 
     commands.insert_resource(ProjectileVisualAssets {
         mesh: meshes.add(Sphere::new(0.28)),
@@ -588,6 +623,7 @@ fn update_match_setup(
     tank_meshes: Res<TankMeshes>,
     presentation: Res<TankPresentationAssets>,
     overlays: Query<Entity, With<MatchSetupOverlay>>,
+    huds: Query<Entity, With<TacticalHud>>,
     tank_visuals: Query<Entity, With<TankVisual>>,
     building_visuals: Query<Entity, With<BuildingVisual>>,
     mut commands: Commands,
@@ -723,6 +759,10 @@ fn update_match_setup(
             &dressing.0,
             dressing_assets.material.clone(),
         );
+        for entity in &huds {
+            commands.entity(entity).despawn();
+        }
+        spawn_tactical_hud(&mut commands, &configuration.0.players);
         gate.started = true;
         for overlay in &overlays {
             commands.entity(overlay).despawn();
@@ -1140,7 +1180,7 @@ fn sync_tank_elimination(tanks: Res<Tanks>, mut visuals: Query<(&TankVisual, &mu
     }
 }
 
-fn spawn_tactical_hud(commands: &mut Commands) {
+fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) {
     commands
         .spawn((
             TacticalHud,
@@ -1171,10 +1211,9 @@ fn spawn_tactical_hud(commands: &mut Commands) {
             ))
             .with_children(|p| {
                 hud_text(p, HudTextField::Match, 22.0);
-                hud_text(p, HudTextField::PlayerOneHealth, 16.0);
-                hud_text(p, HudTextField::PlayerTwoHealth, 16.0);
-                health_bar(p, PlayerId::One);
-                health_bar(p, PlayerId::Two);
+                for player in players {
+                    scoreboard_row(p, player.id, players.len());
+                }
             });
             root.spawn((
                 BackgroundColor(Color::srgba(0.03, 0.05, 0.08, 0.82)),
@@ -1288,32 +1327,66 @@ fn hud_text(parent: &mut ChildSpawnerCommands, field: HudTextField, size: f32) {
         TextColor(Color::WHITE),
     ));
 }
-fn health_bar(parent: &mut ChildSpawnerCommands, player: PlayerId) {
+fn scoreboard_row(parent: &mut ChildSpawnerCommands, player: PlayerId, player_count: usize) {
+    let (font_size, bar_height, row_gap) = scoreboard_layout(player_count);
     parent
         .spawn((
-            BackgroundColor(Color::srgba(0.15, 0.18, 0.22, 0.95)),
+            HudScoreboardRow(player),
+            BackgroundColor(Color::srgba(0.08, 0.11, 0.15, 0.92)),
+            BorderColor::all(Color::srgba(0.45, 0.45, 0.45, 0.7)),
             Node {
                 width: percent(100),
-                height: px(8),
+                padding: UiRect::horizontal(px(4)),
+                border: UiRect::all(px(1)),
+                row_gap: px(row_gap),
+                flex_direction: FlexDirection::Column,
                 ..default()
             },
         ))
-        .with_children(|bar| {
-            bar.spawn((
-                HudHealthFill(player),
-                BackgroundColor(player_color(player)),
-                Node {
-                    width: percent(100),
-                    height: percent(100),
+        .with_children(|row| {
+            row.spawn((
+                HudScoreboardText(player),
+                Text::default(),
+                TextFont {
+                    font_size,
                     ..default()
                 },
+                TextColor(Color::WHITE),
             ));
+            row.spawn((
+                BackgroundColor(Color::srgba(0.15, 0.18, 0.22, 0.95)),
+                Node {
+                    width: percent(100),
+                    height: px(bar_height),
+                    ..default()
+                },
+            ))
+            .with_children(|bar| {
+                bar.spawn((
+                    HudHealthFill(player),
+                    BackgroundColor(player_color(player)),
+                    Node {
+                        width: percent(100),
+                        height: percent(100),
+                        ..default()
+                    },
+                ));
+            });
         });
+}
+
+fn scoreboard_layout(player_count: usize) -> (f32, f32, f32) {
+    if player_count > 4 {
+        (13.0, 6.0, 2.0)
+    } else {
+        (16.0, 8.0, 3.0)
+    }
 }
 
 fn tactical_hud_view(
     turn: TurnState,
     tanks: impl AsRef<[Tank]>,
+    configuration: &MatchConfiguration,
     weapons: PlayerWeaponLoadouts,
     wind: Wind,
     feedback: Option<MovementRejection>,
@@ -1332,10 +1405,7 @@ fn tactical_hud_view(
     TacticalHudView {
         active_player: (turn.match_state == MatchState::InProgress).then_some(turn.current_player),
         action,
-        player_one_health: tanks[0].health,
-        player_two_health: tanks[1].health,
-        player_one_eliminated: tanks[0].is_eliminated(),
-        player_two_eliminated: tanks[1].is_eliminated(),
+        scoreboard: scoreboard_entries(configuration, tanks, &turn),
         aim: (turn.match_state == MatchState::InProgress).then_some(turn.current_aim()),
         weapon: (turn.match_state == MatchState::InProgress).then(|| {
             let loadout = weapons.for_player(turn.current_player);
@@ -1345,6 +1415,31 @@ fn tactical_hud_view(
         movement: turn.remaining_movement().map(|steps| (steps, feedback)),
         result: turn.match_state,
     }
+}
+
+/// The configuration owns display order and names; tanks and turns only supply current gameplay
+/// condition. Keeping this projection pure prevents HUD state from becoming gameplay authority.
+fn scoreboard_entries(
+    configuration: &MatchConfiguration,
+    tanks: &[Tank],
+    turn: &TurnState,
+) -> Vec<ScoreboardEntry> {
+    configuration
+        .players
+        .iter()
+        .map(|player| {
+            let tank = tank_for_player(tanks, player.id);
+            ScoreboardEntry {
+                player: player.id,
+                display_name: player.display_name.clone(),
+                health: tank.health,
+                eliminated: tank.is_eliminated(),
+                active: turn.match_state == MatchState::InProgress
+                    && turn.phase != TurnPhase::ResolvingFire
+                    && turn.current_player == player.id,
+            }
+        })
+        .collect()
 }
 
 /// Presentation observes state only; no HUD path mutates gameplay or gates fixed simulation.
@@ -1357,31 +1452,65 @@ fn sync_tactical_hud(
     wind: Res<BattlefieldWind>,
     feedback: Res<MovementFeedback>,
     configuration: Res<PendingMatchConfiguration>,
-    mut text: Query<(&HudText, &mut Text)>,
+    mut text: Query<(&HudText, &mut Text), Without<HudScoreboardText>>,
+    mut scoreboard_text: Query<(&HudScoreboardText, &mut Text), Without<HudText>>,
     mut fills: Query<(&HudHealthFill, &mut Node)>,
+    mut rows: Query<(&HudScoreboardRow, &mut BorderColor, &mut BackgroundColor)>,
     mut decorations: HudDecorations,
 ) {
     let view = tactical_hud_view(
         turn.0.clone(),
         tanks.0.clone(),
+        &configuration.0,
         weapons.0.clone(),
         wind.0,
         feedback.0,
     );
     for (field, mut value) in &mut text {
         value.0 = if field.0 == HudTextField::Match {
-            configured_match_text(view, &configuration.0)
+            configured_match_text(&view, &configuration.0)
         } else {
-            hud_field_text(field.0, view)
+            hud_field_text(field.0, &view)
         };
     }
+    for (field, mut value) in &mut scoreboard_text {
+        let entry = view
+            .scoreboard
+            .iter()
+            .find(|entry| entry.player == field.0)
+            .expect("every retained scoreboard row must have a configured player");
+        value.0 = scoreboard_entry_text(entry);
+    }
     for (fill, mut node) in &mut fills {
-        let health = if fill.0 == PlayerId::One {
-            view.player_one_health
+        let entry = view
+            .scoreboard
+            .iter()
+            .find(|entry| entry.player == fill.0)
+            .expect("every retained scoreboard fill must have a configured player");
+        node.width = percent(entry.health as f32 / MAX_HEALTH as f32 * 100.0);
+    }
+    for (row, mut border, mut background) in &mut rows {
+        let entry = view
+            .scoreboard
+            .iter()
+            .find(|entry| entry.player == row.0)
+            .expect("every retained scoreboard row must have a configured player");
+        let colour = if entry.active {
+            player_color(entry.player)
+        } else if entry.eliminated {
+            Color::srgb(0.32, 0.12, 0.12)
         } else {
-            view.player_two_health
+            Color::srgba(0.45, 0.45, 0.45, 0.7)
         };
-        node.width = percent(health as f32 / MAX_HEALTH as f32 * 100.0);
+        border.top = colour;
+        border.right = colour;
+        border.bottom = colour;
+        border.left = colour;
+        background.0 = if entry.eliminated {
+            Color::srgba(0.13, 0.05, 0.05, 0.88)
+        } else {
+            Color::srgba(0.08, 0.11, 0.15, 0.92)
+        };
     }
     let active_colour = view
         .active_player
@@ -1403,9 +1532,17 @@ fn sync_tactical_hud(
     }
 }
 
+fn scoreboard_entry_text(entry: &ScoreboardEntry) -> String {
+    if entry.eliminated {
+        format!("{}: OUT", entry.display_name)
+    } else {
+        format!("{}: {}/{}", entry.display_name, entry.health, MAX_HEALTH)
+    }
+}
+
 /// Names remain configuration-owned metadata; the running HUD only resolves stable IDs through
 /// that metadata and never uses editable text as an identity key.
-fn configured_match_text(view: TacticalHudView, configuration: &MatchConfiguration) -> String {
+fn configured_match_text(view: &TacticalHudView, configuration: &MatchConfiguration) -> String {
     let name_for = |id| {
         configuration
             .players
@@ -1445,7 +1582,7 @@ fn wind_plot_offset(wind: Wind) -> (f32, f32) {
     }
 }
 
-fn hud_field_text(field: HudTextField, view: TacticalHudView) -> String {
+fn hud_field_text(field: HudTextField, view: &TacticalHudView) -> String {
     match field {
         HudTextField::Match => match view.result {
             MatchState::Winner(player) => format!("{} WINS", player_name(player)),
@@ -1461,16 +1598,6 @@ fn hud_field_text(field: HudTextField, view: TacticalHudView) -> String {
                 }
             ),
         },
-        HudTextField::PlayerOneHealth => player_health_text(
-            "PLAYER ONE",
-            view.player_one_health,
-            view.player_one_eliminated,
-        ),
-        HudTextField::PlayerTwoHealth => player_health_text(
-            "PLAYER TWO",
-            view.player_two_health,
-            view.player_two_eliminated,
-        ),
         HudTextField::Aim => view.aim.map_or_else(
             || "AIM LOCKED".into(),
             |a| {
@@ -1517,13 +1644,6 @@ fn hud_field_text(field: HudTextField, view: TacticalHudView) -> String {
             HudAction::Moving => "ARROWS MOVE (CAMERA) | ENTER END".into(),
             HudAction::Resolving | HudAction::Finished => String::new(),
         },
-    }
-}
-fn player_health_text(name: &str, health: u8, out: bool) -> String {
-    if out {
-        format!("{name}: OUT")
-    } else {
-        format!("{name}: {health}/{MAX_HEALTH}")
     }
 }
 fn player_color(player: PlayerId) -> Color {
@@ -1939,8 +2059,8 @@ fn update_battlefield_camera(
     if mouse_buttons.pressed(MouseButton::Right) {
         // Mouse motion already represents the full movement since the prior frame.
         controller.yaw -= mouse_motion.delta.x * CAMERA_ORBIT_SENSITIVITY;
-        controller.pitch = (controller.pitch - mouse_motion.delta.y * CAMERA_ORBIT_SENSITIVITY)
-            .clamp(-CAMERA_PITCH_LIMIT, CAMERA_PITCH_LIMIT);
+        controller.pitch =
+            clamp_camera_pitch(controller.pitch - mouse_motion.delta.y * CAMERA_ORBIT_SENSITIVITY);
         controller.desired_pose.yaw = controller.yaw;
         controller.desired_pose.pitch = controller.pitch;
     }
@@ -1956,6 +2076,10 @@ fn update_battlefield_camera(
     interpolate_camera_pose(&mut controller, time.delta_secs());
 
     *transform = camera_transform(&controller);
+}
+
+fn clamp_camera_pitch(pitch: f32) -> f32 {
+    pitch.clamp(CAMERA_MIN_PITCH, CAMERA_MAX_PITCH)
 }
 
 fn camera_presentation_intent(
@@ -2054,6 +2178,53 @@ fn create_battlefield_mesh(terrain: &BattlefieldTerrain) -> Mesh {
     .with_computed_smooth_normals()
 }
 
+fn create_horizon_mesh(horizon: &VisualHorizon) -> Mesh {
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, horizon.positions().to_vec())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, horizon.colours().to_vec())
+    .with_inserted_indices(Indices::U32(horizon.indices().to_vec()))
+    .with_computed_smooth_normals()
+}
+
+fn sky_colour() -> Color {
+    Color::srgb(0.26, 0.55, 0.86)
+}
+
+fn cloud_positions() -> [(Vec3, Vec3); 6] {
+    [
+        (Vec3::new(-76.0, 24.0, -76.0), Vec3::new(11.0, 2.4, 5.0)),
+        (Vec3::new(-63.0, 25.0, -72.0), Vec3::new(7.0, 1.8, 3.5)),
+        (Vec3::new(72.0, 30.0, -92.0), Vec3::new(12.0, 2.5, 5.5)),
+        (Vec3::new(87.0, 30.5, -90.0), Vec3::new(7.0, 1.8, 3.5)),
+        (Vec3::new(-118.0, 26.0, 60.0), Vec3::new(11.0, 2.2, 4.5)),
+        (Vec3::new(105.0, 28.0, 76.0), Vec3::new(9.0, 2.0, 4.0)),
+    ]
+}
+
+fn spawn_clouds(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    let mesh = meshes.add(Sphere::new(1.0));
+    let material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.94, 0.97, 1.0),
+        emissive: Color::srgb(0.94, 0.97, 1.0).into(),
+        unlit: true,
+        ..default()
+    });
+    for (position, scale) in cloud_positions() {
+        commands.spawn((
+            Mesh3d(mesh.clone()),
+            MeshMaterial3d(material.clone()),
+            Transform::from_translation(position).with_scale(scale),
+        ));
+    }
+}
+
 fn spawn_buildings(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
@@ -2079,7 +2250,7 @@ fn spawn_buildings(
 mod tests {
     use super::*;
     use crate::battlefield::Crater;
-    use crate::tank::initial_tanks;
+    use crate::tank::{initial_tanks, initial_tanks_for_players};
 
     fn basic_fired_shot(projectile: Projectile) -> FiredShot {
         FiredShot::new(weapon_definition(WeaponId::BasicShell), projectile)
@@ -2092,10 +2263,7 @@ mod tests {
         let choosing = TacticalHudView {
             active_player: Some(PlayerId::One),
             action: HudAction::Choose,
-            player_one_health: MAX_HEALTH,
-            player_two_health: MAX_HEALTH,
-            player_one_eliminated: false,
-            player_two_eliminated: false,
+            scoreboard: Vec::new(),
             aim: None,
             weapon: None,
             wind: Wind::new(WorldVector::ZERO).unwrap(),
@@ -2103,19 +2271,72 @@ mod tests {
             result: MatchState::InProgress,
         };
         assert_eq!(
-            configured_match_text(choosing, &configuration),
+            configured_match_text(&choosing, &configuration),
             "Ada - CHOOSE ACTION"
         );
-        assert_eq!(
-            configured_match_text(
-                TacticalHudView {
-                    result: MatchState::Winner(PlayerId::One),
-                    ..choosing
-                },
-                &configuration,
-            ),
-            "Ada WINS"
-        );
+        let winner = TacticalHudView {
+            result: MatchState::Winner(PlayerId::One),
+            ..choosing
+        };
+        assert_eq!(configured_match_text(&winner, &configuration), "Ada WINS");
+    }
+
+    #[test]
+    fn scoreboard_entries_follow_configured_players_for_two_three_and_eight_player_matches() {
+        for count in [2, 3, 8] {
+            let mut configuration = MatchConfiguration::with_player_count(count).unwrap();
+            for player in &configuration.players.clone() {
+                configuration
+                    .set_name(player.id, &format!("Commander {}", player.id.0))
+                    .unwrap();
+            }
+            let ids = configuration
+                .players
+                .iter()
+                .map(|player| player.id)
+                .collect::<Vec<_>>();
+            let mut tanks = initial_tanks_for_players(&BattlefieldTerrain::initial(), &ids);
+            tanks[count - 1].health = 0;
+            let turn = initial_turn_state(&tanks);
+            let entries = scoreboard_entries(&configuration, &tanks, &turn);
+
+            assert_eq!(entries.len(), count);
+            assert_eq!(
+                entries.iter().map(|entry| entry.player).collect::<Vec<_>>(),
+                ids
+            );
+            assert_eq!(entries[0].display_name, "Commander 1");
+            assert_eq!(entries[count - 1].health, 0);
+            assert!(entries[count - 1].eliminated);
+            assert!(entries[0].active);
+
+            let mut resolving = turn.clone();
+            assert!(resolving.begin_fire().is_some());
+            assert!(
+                scoreboard_entries(&configuration, &tanks, &resolving)
+                    .iter()
+                    .all(|entry| !entry.active)
+            );
+        }
+    }
+
+    #[test]
+    fn scoreboard_layout_keeps_duels_roomy_and_large_matches_compact() {
+        assert_eq!(scoreboard_layout(2), (16.0, 8.0, 3.0));
+        assert_eq!(scoreboard_layout(4), (16.0, 8.0, 3.0));
+        assert_eq!(scoreboard_layout(8), (13.0, 6.0, 2.0));
+    }
+
+    #[test]
+    fn sky_clouds_horizon_and_camera_safety_have_a_small_presentation_plan() {
+        assert_eq!(sky_colour(), Color::srgb(0.26, 0.55, 0.86));
+        assert!(!cloud_positions().is_empty());
+        assert_eq!(clamp_camera_pitch(-10.0), CAMERA_MIN_PITCH);
+        assert_eq!(clamp_camera_pitch(10.0), CAMERA_MAX_PITCH);
+        let terrain = BattlefieldTerrain::generated(BattlefieldSeed(17));
+        let horizon = VisualHorizon::from_terrain(&terrain, BattlefieldSeed(17));
+        assert!(!horizon.positions().is_empty());
+        assert!(create_horizon_mesh(&horizon).count_vertices() > 0);
     }
 
     #[test]
@@ -2300,6 +2521,7 @@ mod tests {
     fn tactical_hud_view_is_read_only_and_tracks_turn_specific_state() {
         let terrain = BattlefieldTerrain::initial();
         let tanks = initial_tanks(&terrain);
+        let configuration = MatchConfiguration::default();
         let wind = Wind::new(WorldVector {
             x: 1.5,
             y: 0.0,
@@ -2310,14 +2532,15 @@ mod tests {
         let choosing_view = tactical_hud_view(
             choosing.clone(),
             tanks,
+            &configuration,
             PlayerWeaponLoadouts::default(),
             wind,
             None,
         );
         assert_eq!(choosing_view.active_player, Some(PlayerId::One));
         assert_eq!(choosing_view.action, HudAction::Choose);
-        assert_eq!(choosing_view.player_one_health, MAX_HEALTH);
-        assert_eq!(choosing_view.player_two_health, MAX_HEALTH);
+        assert_eq!(choosing_view.scoreboard.len(), 2);
+        assert!(choosing_view.scoreboard[0].active);
         assert_eq!(choosing_view.aim, Some(choosing.current_aim()));
         assert_eq!(choosing_view.movement, None);
 
@@ -2326,6 +2549,7 @@ mod tests {
         let moving_view = tactical_hud_view(
             moving.clone(),
             tanks,
+            &configuration,
             PlayerWeaponLoadouts::default(),
             wind,
             Some(MovementRejection::Slope),
@@ -2344,6 +2568,7 @@ mod tests {
         let resolving_view = tactical_hud_view(
             resolving.clone(),
             tanks,
+            &configuration,
             PlayerWeaponLoadouts::default(),
             wind,
             None,
@@ -2356,6 +2581,7 @@ mod tests {
     fn hud_shows_the_active_players_selected_weapon_and_truthful_ammunition() {
         let terrain = BattlefieldTerrain::initial();
         let tanks = initial_tanks(&terrain);
+        let configuration = MatchConfiguration::default();
         let wind = Wind::new(WorldVector::ZERO).unwrap();
         let turn = initial_turn_state(tanks);
         let mut weapons = PlayerWeaponLoadouts::default();
@@ -2365,18 +2591,25 @@ mod tests {
                 .for_player_mut(PlayerId::One)
                 .select(WeaponId::HighExplosive)
         );
-        let view = tactical_hud_view(turn.clone(), tanks, weapons.clone(), wind, None);
+        let view = tactical_hud_view(
+            turn.clone(),
+            tanks,
+            &configuration,
+            weapons.clone(),
+            wind,
+            None,
+        );
 
         assert_eq!(
             view.weapon,
             Some((WeaponId::HighExplosive, WeaponAvailability::Remaining(2)))
         );
         assert_eq!(
-            hud_field_text(HudTextField::Weapon, view),
+            hud_field_text(HudTextField::Weapon, &view),
             "HIGH EXPLOSIVE: x2"
         );
         assert_eq!(
-            hud_field_text(HudTextField::Controls, view),
+            hud_field_text(HudTextField::Controls, &view),
             "1 BASIC | 2 HE | 3 HEAVY | M MOVE | SPACE FIRE\nARROWS AIM | -/= POWER"
         );
 
@@ -2385,13 +2618,14 @@ mod tests {
                 .for_player_mut(PlayerId::One)
                 .select(WeaponId::HeavyShell)
         );
-        let heavy_view = tactical_hud_view(turn.clone(), tanks, weapons, wind, None);
+        let heavy_view =
+            tactical_hud_view(turn.clone(), tanks, &configuration, weapons, wind, None);
         assert_eq!(
             heavy_view.weapon,
             Some((WeaponId::HeavyShell, WeaponAvailability::Remaining(2)))
         );
         assert_eq!(
-            hud_field_text(HudTextField::Weapon, heavy_view),
+            hud_field_text(HudTextField::Weapon, &heavy_view),
             "HEAVY SHELL: x2"
         );
     }
@@ -2527,26 +2761,29 @@ mod tests {
     fn hud_text_hides_contextual_controls_after_actions_resolve() {
         let terrain = BattlefieldTerrain::initial();
         let tanks = initial_tanks(&terrain);
+        let configuration = MatchConfiguration::default();
         let wind = Wind::new(WorldVector::ZERO).unwrap();
         let choosing = tactical_hud_view(
             initial_turn_state(tanks),
             tanks,
+            &configuration,
             PlayerWeaponLoadouts::default(),
             wind,
             None,
         );
-        assert!(hud_field_text(HudTextField::Controls, choosing).contains("M MOVE"));
+        assert!(hud_field_text(HudTextField::Controls, &choosing).contains("M MOVE"));
 
         let mut resolving_turn = initial_turn_state(tanks);
         assert!(resolving_turn.begin_fire().is_some());
         let resolving = tactical_hud_view(
             resolving_turn,
             tanks,
+            &configuration,
             PlayerWeaponLoadouts::default(),
             wind,
             None,
         );
-        assert!(hud_field_text(HudTextField::Controls, resolving).is_empty());
+        assert!(hud_field_text(HudTextField::Controls, &resolving).is_empty());
     }
 
     #[test]
