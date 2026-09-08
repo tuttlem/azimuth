@@ -10,9 +10,15 @@ They describe Azimuth's game world rather than a rendering API's coordinate nami
 - **Battlefield centre**: `(0, 0, 0)` is the centre of the initial battlefield.
 - **Units**: One world-space unit is an abstract game-space unit. It has no real-world metre
   equivalence.
-- **Initial visible bounds**: The visible battlefield is approximately 40 units wide on X and 40
-  units deep on Z, centred at the origin. Its horizontal extent is approximately -20 to +20 on
-  both axes.
+- **Battlefield bounds**: The default battlefield is 120 units wide on X and 120 units deep on Z,
+  centred at the origin. Its horizontal extent is -60 through +60 on both axes.
+- **Generated landscape**: A captured match seed deterministically derives independent terrain,
+  starting-position, dressing, and wind streams. Terrain combines broad mountains/ridges/bowls
+  with smaller rolling variation; the current mutable triangle surface remains the authority for
+  rendering, tank support, movement, and projectile intersection.
+- **Water and dressing**: The water table is a flat visual plane at Y=0. Terrain below it remains
+  ordinary authoritative terrain. Sparse grey building blocks are also presentation-only: neither
+  water nor buildings collide, provide cover, change movement, take damage, or affect projectiles.
 
 ## Shot Angles
 
@@ -34,10 +40,10 @@ They describe Azimuth's game world rather than a rendering API's coordinate nami
   pivot is one unit above the tank base and its barrel end is 2.1 units along the canonical full
   shot direction. The firing-origin marker is a visual reference for that same domain point, so
   elevation moves the marker upward and shortens its horizontal advance with the visible barrel.
-- The first projectile simulation has a generous useful volume: X and Z must remain within 60
-  units of the origin, Y must remain from -30 through 100, and flight lasts at most 20 simulated
-  seconds.
-- The visible battlefield terrain is bounded from -20 to +20 on X and Z. It is a mutable 20-by-20
+- The battlefield projectile simulation allows a small edge margin around the 60-unit map extent,
+  uses Y from -40 through 120, and lasts at most 20 simulated seconds. This changes supported map
+  volume, not weapon launch physics or range identity.
+- The visible battlefield terrain is bounded from -60 to +60 on X and Z. It is a mutable 64-by-64
   grid of rendered triangles whose current piecewise planar surface is authoritative for local
   terrain height, tank support, and projectile intersection. Impacts permanently lower that
   surface; affected living tanks then settle using that same current surface.

@@ -1,4 +1,4 @@
-use crate::battlefield::{BattlefieldTerrain, is_within_bounds};
+use crate::battlefield::{BattlefieldTerrain, HALF_EXTENT, is_dry_and_gentle, is_within_bounds};
 use crate::projectile::{FIXED_STEP_SECONDS, Gravity};
 use crate::world::{WorldPosition, WorldVector};
 
@@ -165,7 +165,7 @@ impl Tank {
         }
 
         let ground = terrain.height(self.pose.position.x, self.pose.position.z);
-        if self.pose.position.y - ground <= SUPPORT_TOLERANCE {
+        if self.pose.position.y - ground <= SUPPORT_TOLERANCE + f32::EPSILON {
             self.pose.position.y = ground;
             self.support = TankSupport::Supported;
         } else if !self.is_settling() {
@@ -261,7 +261,11 @@ impl Tank {
     }
 }
 
+pub const MINIMUM_START_SEPARATION: f32 = 18.0;
+
+#[cfg(test)]
 pub fn initial_tanks_for_players(terrain: &BattlefieldTerrain, players: &[PlayerId]) -> Vec<Tank> {
+    // Compatibility fixture for focused non-spawn tests. Running matches use the seeded selector.
     const POSITIONS: [(f32, f32); 8] = [
         (-12.0, -8.0),
         (12.0, 8.0),
@@ -293,6 +297,91 @@ pub fn initial_tanks_for_players(terrain: &BattlefieldTerrain, players: &[Player
         .collect()
 }
 
+/// Starts reject only obvious invalid ground. They deliberately distribute across sectors, but do
+/// not pretend to solve future tactical fairness such as sight lines or ballistic advantage.
+pub fn initial_tanks_for_players_seeded(
+    terrain: &BattlefieldTerrain,
+    players: &[PlayerId],
+    mut seed: u64,
+) -> Vec<Tank> {
+    assert!(
+        (2..=8).contains(&players.len()),
+        "matches support two through eight tanks"
+    );
+    let mut candidates = Vec::new();
+    for z_index in -4..=4 {
+        for x_index in -4..=4 {
+            let jitter_x = random_range(&mut seed, -2.0, 2.0);
+            let jitter_z = random_range(&mut seed, -2.0, 2.0);
+            let x = x_index as f32 * 12.0 + jitter_x;
+            let z = z_index as f32 * 12.0 + jitter_z;
+            if is_dry_and_gentle(terrain, x, z) {
+                candidates.push((x, z));
+            }
+        }
+    }
+    // Seeded Fisher-Yates order makes matching inputs reproducible while the farthest-choice
+    // pass prevents an eight-player match collapsing into one old development-area cluster.
+    for index in (1..candidates.len()).rev() {
+        let other = (next_random(&mut seed) as usize) % (index + 1);
+        candidates.swap(index, other);
+    }
+    let mut selected = Vec::with_capacity(players.len());
+    while selected.len() < players.len() {
+        let Some((best_index, _)) = candidates
+            .iter()
+            .enumerate()
+            .filter(|(_, candidate)| {
+                selected.iter().all(|selected: &(f32, f32)| {
+                    horizontal_distance(**candidate, selected) >= MINIMUM_START_SEPARATION
+                })
+            })
+            .map(|(index, candidate)| {
+                let spread = selected
+                    .iter()
+                    .map(|selected| horizontal_distance(*candidate, selected))
+                    .fold(HALF_EXTENT, f32::min);
+                (index, spread)
+            })
+            .max_by(|left, right| left.1.total_cmp(&right.1))
+        else {
+            panic!("generated battlefield lacks enough dry, gentle, separated tank starts");
+        };
+        selected.push(candidates.swap_remove(best_index));
+    }
+
+    players
+        .iter()
+        .copied()
+        .zip(selected)
+        .map(|(owner, (x, z))| {
+            let direction = HorizontalDirection::new(-x, -z);
+            Tank::on_terrain(
+                terrain,
+                owner,
+                HorizontalPosition { x, z },
+                direction,
+                direction,
+            )
+        })
+        .collect()
+}
+
+fn horizontal_distance(first: (f32, f32), second: &(f32, f32)) -> f32 {
+    let dx = first.0 - second.0;
+    let dz = first.1 - second.1;
+    (dx * dx + dz * dz).sqrt()
+}
+
+fn next_random(seed: &mut u64) -> u64 {
+    *seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    *seed
+}
+
+fn random_range(seed: &mut u64, minimum: f32, maximum: f32) -> f32 {
+    minimum + (maximum - minimum) * ((next_random(seed) >> 40) as f32 / (1_u32 << 24) as f32)
+}
+
 /// Compatibility helper for existing two-player-focused domain tests.
 #[cfg(test)]
 pub fn initial_tanks(terrain: &BattlefieldTerrain) -> [Tank; 2] {
@@ -309,7 +398,7 @@ mod tests {
         let mut terrain = BattlefieldTerrain::initial();
         terrain.apply_crater(
             WorldPosition {
-                x: tank.pose.position.x,
+                x: tank.pose.position.x + 1.0,
                 y: 0.0,
                 z: tank.pose.position.z,
             },
@@ -332,6 +421,39 @@ mod tests {
                 tank.pose.position.y,
                 terrain.height(tank.pose.position.x, tank.pose.position.z)
             );
+        }
+    }
+
+    #[test]
+    fn seeded_starts_are_dry_supported_separated_and_repeatable_for_multiplayer() {
+        for seed in [3, 17, 42, 99, 4_242] {
+            for count in [2, 4, 8] {
+                let terrain =
+                    BattlefieldTerrain::generated(crate::battlefield::BattlefieldSeed(seed));
+                let players = (1..=count)
+                    .map(|number| PlayerId(number as u8))
+                    .collect::<Vec<_>>();
+                let first = initial_tanks_for_players_seeded(&terrain, &players, 77);
+                assert_eq!(
+                    first,
+                    initial_tanks_for_players_seeded(&terrain, &players, 77)
+                );
+                assert_eq!(first.len(), count);
+                for (index, tank) in first.iter().enumerate() {
+                    assert!(is_within_bounds(tank.pose.position.x, tank.pose.position.z));
+                    assert!(tank.pose.position.y > crate::battlefield::WATER_TABLE);
+                    assert!(is_dry_and_gentle(
+                        &terrain,
+                        tank.pose.position.x,
+                        tank.pose.position.z
+                    ));
+                    for other in &first[..index] {
+                        let dx = tank.pose.position.x - other.pose.position.x;
+                        let dz = tank.pose.position.z - other.pose.position.z;
+                        assert!((dx * dx + dz * dz).sqrt() >= MINIMUM_START_SEPARATION);
+                    }
+                }
+            }
         }
     }
 
@@ -562,14 +684,14 @@ mod tests {
             .launch_direction(),
         );
 
-        assert_eq!(
-            representation.muzzle_position,
-            WorldPosition {
-                x: tank.pose.position.x + tank.pose.turret_forward.x * FIRING_ORIGIN_FORWARD_OFFSET,
-                y: tank.pose.position.y + FIRING_ORIGIN_HEIGHT,
-                z: tank.pose.position.z + tank.pose.turret_forward.z * FIRING_ORIGIN_FORWARD_OFFSET,
-            }
-        );
+        let expected = WorldPosition {
+            x: tank.pose.position.x + tank.pose.turret_forward.x * FIRING_ORIGIN_FORWARD_OFFSET,
+            y: tank.pose.position.y + FIRING_ORIGIN_HEIGHT,
+            z: tank.pose.position.z + tank.pose.turret_forward.z * FIRING_ORIGIN_FORWARD_OFFSET,
+        };
+        assert!((representation.muzzle_position.x - expected.x).abs() < 0.000_01);
+        assert!((representation.muzzle_position.y - expected.y).abs() < 0.000_01);
+        assert!((representation.muzzle_position.z - expected.z).abs() < 0.000_01);
         assert!((representation.turret_forward.x - tank.pose.turret_forward.x).abs() < 0.000_1);
         assert!((representation.turret_forward.z - tank.pose.turret_forward.z).abs() < 0.000_1);
     }
@@ -652,8 +774,8 @@ mod tests {
     fn movement_rejections_preserve_the_original_tank() {
         let terrain = BattlefieldTerrain::initial();
         let mut tank = initial_tanks(&terrain)[0];
-        tank.pose.position.x = 20.0;
-        tank.pose.position.y = terrain.height(20.0, tank.pose.position.z);
+        tank.pose.position.x = HALF_EXTENT;
+        tank.pose.position.y = terrain.height(HALF_EXTENT, tank.pose.position.z);
         let before = tank;
 
         assert_eq!(
@@ -684,11 +806,11 @@ mod tests {
         let mut steep_terrain = BattlefieldTerrain::initial();
         steep_terrain.apply_crater(
             WorldPosition {
-                x: tank.pose.position.x,
+                x: tank.pose.position.x + 1.0,
                 y: 0.0,
                 z: tank.pose.position.z,
             },
-            crate::battlefield::Crater::new(1.5, 4.0).unwrap(),
+            crate::battlefield::Crater::new(6.0, 20.0).unwrap(),
         );
         let before = tank;
         assert_eq!(

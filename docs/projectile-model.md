@@ -31,6 +31,12 @@ responsibility. The swept terrain test uses this same wind-altered segment.
 The battlefield is a static grid of rendered triangles. Its local-height query uses those same
 triangles, so tank grounding, projectile collision, and the visible surface agree.
 
+The expanded 120-unit battlefield permits a small useful-volume margin beyond its edges and a
+higher vertical ceiling for mountain and high-arc shots. This remains a fixed-step termination
+bound, not a change to weapon launch speed, gravity, wind, or projectile behaviour. The flat water
+plane and sparse building dressing are presentation-only and therefore do not participate in the
+swept terrain test.
+
 After calculating each candidate fixed-step position, the projectile compares its previous and
 candidate positions with the terrain. When an in-bounds segment moves from above terrain to on or
 below it, the simulation refines the crossing with 24 fixed bisection iterations. This prevents a

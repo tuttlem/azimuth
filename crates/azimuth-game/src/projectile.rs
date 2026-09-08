@@ -167,10 +167,20 @@ pub struct SimulationLimits {
 }
 
 impl SimulationLimits {
+    #[cfg(test)]
     pub const DEVELOPMENT: Self = Self {
         horizontal_extent: 60.0,
         minimum_y: -30.0,
         maximum_y: 100.0,
+        maximum_flight_seconds: 20.0,
+    };
+
+    /// Deliberately bounded to the expanded map plus a small segment margin. This is not a
+    /// weapon range increase: terrain impacts still use the existing fixed-step flight model.
+    pub const BATTLEFIELD: Self = Self {
+        horizontal_extent: 62.0,
+        minimum_y: -40.0,
+        maximum_y: 120.0,
         maximum_flight_seconds: 20.0,
     };
 

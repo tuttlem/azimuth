@@ -309,6 +309,12 @@ Terrain should affect both aiming and tactical position.
 
 ## Battlefield Scale and Features
 
+Implementation note (2026-09-08): the expanded 120-unit seeded battlefield, height colouring,
+presentation-only water/buildings, and valid 2–8 starts have automated coverage. The checkboxes
+remain open until the required multi-seed visual and multiplayer playthroughs are performed in a
+graphical session. Buildings are deliberately non-authoritative; reconsider authoritative or
+destructible structures only if that presentation boundary proves confusing in play.
+
 * [ ] Increase the battlefield beyond the current small development arena while retaining readable
   camera framing, projectile limits, terrain queries, and deterministic simulation.
 * [ ] Establish a useful playable size range for two-player duels before considering larger matches.

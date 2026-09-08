@@ -1,9 +1,26 @@
 use crate::world::WorldPosition;
 
-pub const HALF_EXTENT: f32 = 20.0;
-pub const TERRAIN_CELLS_PER_SIDE: usize = 20;
+/// One large default battlefield. At maximum 45-degree power, ordinary shells can still cross
+/// most of this width; a larger map would make normal artillery engagement needlessly rare.
+pub const HALF_EXTENT: f32 = 60.0;
+/// Physical scale and sample density are deliberately separate. This keeps existing craters and
+/// one-unit positioning readable without multiplying mesh density with the map's area.
+pub const TERRAIN_CELLS_PER_SIDE: usize = 64;
+pub const WATER_TABLE: f32 = 0.0;
 const VERTICES_PER_SIDE: usize = TERRAIN_CELLS_PER_SIDE + 1;
 const TERRAIN_CELL_SIZE: f32 = HALF_EXTENT * 2.0 / TERRAIN_CELLS_PER_SIDE as f32;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BattlefieldSeed(pub u64);
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BuildingPlacement {
+    pub position: WorldPosition,
+    pub width: f32,
+    pub depth: f32,
+    pub height: f32,
+    pub yaw_radians: f32,
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Crater {
@@ -49,11 +66,26 @@ impl Default for BattlefieldTerrain {
 
 impl BattlefieldTerrain {
     pub fn initial() -> Self {
+        // Retained as a compact deterministic fixture for older focused physics tests. Running
+        // matches use `generated`, which is the map-selection path introduced by this feature.
         let mut heights = Vec::with_capacity(VERTICES_PER_SIDE * VERTICES_PER_SIDE);
         for z_index in 0..VERTICES_PER_SIDE {
             for x_index in 0..VERTICES_PER_SIDE {
                 let (x, z) = vertex_position(x_index, z_index);
-                heights.push(authored_height(x, z));
+                heights.push(authored_fixture_height(x, z));
+            }
+        }
+        Self { heights }
+    }
+
+    /// Macro shapes create the artillery decisions; local variation merely stops their slopes
+    /// feeling synthetic. Keeping both here makes the rendered mesh and gameplay query one world.
+    pub fn generated(seed: BattlefieldSeed) -> Self {
+        let mut heights = Vec::with_capacity(VERTICES_PER_SIDE * VERTICES_PER_SIDE);
+        for z_index in 0..VERTICES_PER_SIDE {
+            for x_index in 0..VERTICES_PER_SIDE {
+                let (x, z) = vertex_position(x_index, z_index);
+                heights.push(generated_height(x, z, seed));
             }
         }
         Self { heights }
@@ -134,6 +166,23 @@ impl BattlefieldTerrain {
         positions
     }
 
+    /// Presentation is derived from current terrain height so a crater cannot reveal stale or
+    /// uninitialised colour. Water itself is a separate flat presentation plane.
+    pub fn mesh_colours(&self) -> Vec<[f32; 4]> {
+        self.heights.iter().copied().map(elevation_colour).collect()
+    }
+
+    #[cfg(test)]
+    pub fn sampled_elevation_span(&self) -> f32 {
+        let minimum = self.heights.iter().copied().fold(f32::INFINITY, f32::min);
+        let maximum = self
+            .heights
+            .iter()
+            .copied()
+            .fold(f32::NEG_INFINITY, f32::max);
+        maximum - minimum
+    }
+
     #[cfg(test)]
     pub fn all_heights_finite(&self) -> bool {
         self.heights.iter().all(|height| height.is_finite())
@@ -145,6 +194,94 @@ impl BattlefieldTerrain {
 
 pub fn is_within_bounds(x: f32, z: f32) -> bool {
     (-HALF_EXTENT..=HALF_EXTENT).contains(&x) && (-HALF_EXTENT..=HALF_EXTENT).contains(&z)
+}
+
+pub fn elevation_colour(height: f32) -> [f32; 4] {
+    // Stops are intentionally world-height based: falling into a crater can expose lower grass,
+    // which reads naturally without pretending to simulate soil layers.
+    const LOWLAND: [f32; 3] = [0.06, 0.28, 0.10];
+    const GRASS: [f32; 3] = [0.16, 0.52, 0.16];
+    const EARTH: [f32; 3] = [0.40, 0.30, 0.17];
+    const ROCK: [f32; 3] = [0.43, 0.43, 0.40];
+    const SNOW: [f32; 3] = [0.94, 0.95, 0.97];
+    let colour = if height <= WATER_TABLE {
+        LOWLAND
+    } else if height < 4.0 {
+        blend(LOWLAND, GRASS, (height - WATER_TABLE) / 4.0)
+    } else if height < 11.0 {
+        blend(GRASS, EARTH, (height - 4.0) / 7.0)
+    } else if height < 18.0 {
+        blend(EARTH, ROCK, (height - 11.0) / 7.0)
+    } else if height < 25.0 {
+        blend(ROCK, SNOW, (height - 18.0) / 7.0)
+    } else {
+        SNOW
+    };
+    [colour[0], colour[1], colour[2], 1.0]
+}
+
+fn blend(first: [f32; 3], second: [f32; 3], fraction: f32) -> [f32; 3] {
+    let fraction = fraction.clamp(0.0, 1.0);
+    [
+        first[0] + (second[0] - first[0]) * fraction,
+        first[1] + (second[1] - first[1]) * fraction,
+        first[2] + (second[2] - first[2]) * fraction,
+    ]
+}
+
+pub fn is_dry_and_gentle(terrain: &BattlefieldTerrain, x: f32, z: f32) -> bool {
+    const STEP: f32 = 1.0;
+    const MAX_CHANGE: f32 = 0.75;
+    let Some(height) = terrain.height_if_within_bounds(x, z) else {
+        return false;
+    };
+    height > WATER_TABLE
+        && [(STEP, 0.0), (-STEP, 0.0), (0.0, STEP), (0.0, -STEP)]
+            .into_iter()
+            .all(|(dx, dz)| {
+                terrain
+                    .height_if_within_bounds(x + dx, z + dz)
+                    .is_some_and(|neighbour| (neighbour - height).abs() <= MAX_CHANGE)
+            })
+}
+
+/// Builds are intentionally records rather than world objects. The renderer may turn them into
+/// cuboids, but gameplay never receives them as collision, cover, or damage data.
+pub fn generate_buildings(
+    terrain: &BattlefieldTerrain,
+    starts: &[(f32, f32)],
+    mut seed: u64,
+) -> Vec<BuildingPlacement> {
+    let mut buildings = Vec::new();
+    for _ in 0..24 {
+        let x = random_range(&mut seed, -50.0, 50.0);
+        let z = random_range(&mut seed, -50.0, 50.0);
+        if !is_dry_and_gentle(terrain, x, z)
+            || starts.iter().any(|(start_x, start_z)| {
+                let dx = x - start_x;
+                let dz = z - start_z;
+                dx * dx + dz * dz < 8.0 * 8.0
+            })
+        {
+            continue;
+        }
+        let base = WorldPosition {
+            x,
+            y: terrain.height(x, z),
+            z,
+        };
+        buildings.push(BuildingPlacement {
+            position: base,
+            width: random_range(&mut seed, 1.5, 3.5),
+            depth: random_range(&mut seed, 1.5, 3.5),
+            height: random_range(&mut seed, 1.5, 5.0),
+            yaw_radians: random_range(&mut seed, 0.0, std::f32::consts::TAU),
+        });
+        if buildings.len() >= 8 {
+            break;
+        }
+    }
+    buildings
 }
 
 pub fn terrain_mesh_indices() -> Vec<u32> {
@@ -168,8 +305,39 @@ pub fn terrain_mesh_indices() -> Vec<u32> {
     indices
 }
 
-fn authored_height(x: f32, z: f32) -> f32 {
+fn generated_height(x: f32, z: f32, seed: BattlefieldSeed) -> f32 {
+    let mut random = seed.0;
+    let mountain_x = random_range(&mut random, -42.0, -24.0);
+    let mountain_z = random_range(&mut random, -30.0, 30.0);
+    let ridge_x = random_range(&mut random, -10.0, 25.0);
+    let ridge_z = random_range(&mut random, -35.0, 35.0);
+    let ridge_angle = random_range(&mut random, -0.8, 0.8);
+    let bowl_x = random_range(&mut random, 18.0, 40.0);
+    let bowl_z = random_range(&mut random, -28.0, 28.0);
+    let mountain = smooth_bump(x - mountain_x, z - mountain_z, 22.0, 20.0) * 21.0;
+    let rotated_x = (x - ridge_x) * ridge_angle.cos() + (z - ridge_z) * ridge_angle.sin();
+    let rotated_z = -(x - ridge_x) * ridge_angle.sin() + (z - ridge_z) * ridge_angle.cos();
+    let ridge = smooth_bump(rotated_x, rotated_z, 42.0, 7.0) * 7.0;
+    let bowl = smooth_bump(x - bowl_x, z - bowl_z, 25.0, 22.0) * -12.0;
+    let local = (x * random_range(&mut random, 0.08, 0.13)).sin()
+        * (z * random_range(&mut random, 0.07, 0.12)).cos()
+        * 1.2
+        + ((x + z) * random_range(&mut random, 0.04, 0.08)).sin() * 0.8;
+    6.0 + mountain + ridge + bowl + local
+}
+
+fn authored_fixture_height(x: f32, z: f32) -> f32 {
     1.8 * (x * 0.16).sin() * (z * 0.13).cos() + z * 0.08
+}
+
+fn smooth_bump(x: f32, z: f32, radius_x: f32, radius_z: f32) -> f32 {
+    let distance = x * x / (radius_x * radius_x) + z * z / (radius_z * radius_z);
+    (1.0 - distance).max(0.0).powi(2)
+}
+
+fn random_range(seed: &mut u64, minimum: f32, maximum: f32) -> f32 {
+    *seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
+    minimum + (maximum - minimum) * ((*seed >> 40) as f32 / (1_u32 << 24) as f32)
 }
 fn vertex_index(x_index: usize, z_index: usize) -> usize {
     z_index * VERTICES_PER_SIDE + x_index
@@ -292,13 +460,13 @@ mod tests {
     #[test]
     fn narrow_deep_crater_produces_a_repeatable_impassable_step() {
         let start = WorldPosition {
-            x: -12.0,
+            x: -11.25,
             y: 0.0,
             z: -8.0,
         };
         let mut first = BattlefieldTerrain::initial();
         let mut second = BattlefieldTerrain::initial();
-        let crater = Crater::new(1.5, 4.0).unwrap();
+        let crater = Crater::new(4.0, 8.0).unwrap();
         first.apply_crater(start, crater);
         second.apply_crater(start, crater);
 
@@ -310,5 +478,40 @@ mod tests {
             .unwrap();
         assert_eq!(first_change, second_change);
         assert!(first_change > crate::tank::MAX_MOVEMENT_ELEVATION_CHANGE);
+    }
+
+    #[test]
+    fn generated_battlefields_are_reproducible_varied_and_large_scale() {
+        let first = BattlefieldTerrain::generated(BattlefieldSeed(42));
+        let repeated = BattlefieldTerrain::generated(BattlefieldSeed(42));
+        let different = BattlefieldTerrain::generated(BattlefieldSeed(43));
+        assert_eq!(first, repeated);
+        assert_ne!(first, different);
+        assert_eq!(first.mesh_positions().len(), 65 * 65);
+        assert!(first.sampled_elevation_span() >= 24.0);
+        for (x, z) in [(-HALF_EXTENT, -HALF_EXTENT), (HALF_EXTENT, HALF_EXTENT)] {
+            assert!(first.height(x, z).is_finite());
+        }
+    }
+
+    #[test]
+    fn elevation_colours_and_dressing_are_bounded_and_deterministic() {
+        let terrain = BattlefieldTerrain::generated(BattlefieldSeed(9));
+        let low = elevation_colour(1.0);
+        let high = elevation_colour(30.0);
+        assert!(
+            low.iter()
+                .chain(high.iter())
+                .all(|value| value.is_finite() && *value >= 0.0 && *value <= 1.0)
+        );
+        assert!(high[0] > low[0]);
+        let starts = [(-40.0, -40.0), (40.0, 40.0)];
+        let first = generate_buildings(&terrain, &starts, 99);
+        assert_eq!(first, generate_buildings(&terrain, &starts, 99));
+        assert!(first.iter().all(|building| {
+            is_within_bounds(building.position.x, building.position.z)
+                && building.position.y > WATER_TABLE
+                && is_dry_and_gentle(&terrain, building.position.x, building.position.z)
+        }));
     }
 }

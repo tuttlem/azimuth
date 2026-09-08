@@ -12,7 +12,10 @@ use std::f32::consts::FRAC_PI_2;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use aiming::{AimAdjustment, AimingState};
-use battlefield::{BattlefieldTerrain, HALF_EXTENT, terrain_mesh_indices};
+use battlefield::{
+    BattlefieldSeed, BattlefieldTerrain, BuildingPlacement, HALF_EXTENT, WATER_TABLE,
+    generate_buildings, terrain_mesh_indices,
+};
 use bevy::{
     asset::RenderAssetUsages,
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
@@ -28,14 +31,14 @@ use projectile::{
 };
 use tank::{
     HorizontalDirection, MAX_HEALTH, MovementDirection, MovementRejection, PlayerId, Tank,
-    TankFiringRepresentation, initial_tanks_for_players,
+    TankFiringRepresentation, initial_tanks_for_players_seeded,
 };
 use turn::{MatchState, TurnPhase, TurnState};
 use weapon::{FiredShot, PlayerWeaponLoadouts, WeaponAvailability, WeaponId, weapon_definition};
 use world::{WorldPosition, WorldVector};
 
 const CAMERA_MIN_DISTANCE: f32 = 8.0;
-const CAMERA_MAX_DISTANCE: f32 = 60.0;
+const CAMERA_MAX_DISTANCE: f32 = 150.0;
 const CAMERA_ORBIT_SENSITIVITY: f32 = 0.005;
 const CAMERA_ZOOM_SPEED: f32 = 2.0;
 const CAMERA_PITCH_LIMIT: f32 = FRAC_PI_2 - 0.1;
@@ -43,8 +46,8 @@ const CAMERA_TRANSITION_SPEED: f32 = 5.0;
 const ACTIVE_PLAYER_CAMERA_DISTANCE: f32 = 16.0;
 const ACTIVE_PLAYER_CAMERA_HEIGHT: f32 = 1.8;
 const ACTIVE_PLAYER_CAMERA_PITCH: f32 = -0.35;
-const SHOT_CAMERA_DISTANCE: f32 = 38.0;
-const SHOT_CAMERA_HEIGHT: f32 = 3.0;
+const SHOT_CAMERA_DISTANCE: f32 = 105.0;
+const SHOT_CAMERA_HEIGHT: f32 = 16.0;
 const SHOT_CAMERA_PITCH: f32 = -0.6;
 const AIM_REPEAT_DELAY_SECONDS: f32 = 0.3;
 const AIM_REPEAT_INTERVAL_SECONDS: f32 = 0.1;
@@ -110,6 +113,12 @@ struct CurrentTurn(TurnState);
 
 #[derive(Resource)]
 struct BattlefieldState(BattlefieldTerrain);
+
+#[derive(Resource, Clone, Copy)]
+struct MatchSeed(BattlefieldSeed);
+
+#[derive(Resource, Default)]
+struct WorldDressing(Vec<BuildingPlacement>);
 
 #[derive(Resource, Default)]
 struct ProjectileFlight(Option<FiredShot>);
@@ -182,6 +191,11 @@ struct ExplosionVisualAssets {
     material: Handle<StandardMaterial>,
 }
 
+#[derive(Resource)]
+struct WorldDressingAssets {
+    material: Handle<StandardMaterial>,
+}
+
 #[derive(Component)]
 struct ProjectileVisual;
 
@@ -190,6 +204,12 @@ struct ImpactMarker;
 
 #[derive(Component)]
 struct BattlefieldVisual;
+
+#[derive(Component)]
+struct WaterVisual;
+
+#[derive(Component)]
+struct BuildingVisual;
 
 #[derive(Component)]
 struct ExplosionVisual {
@@ -313,20 +333,22 @@ impl Default for BattlefieldCamera {
 }
 
 fn main() {
-    let terrain = BattlefieldTerrain::initial();
     let configuration = MatchConfiguration::default();
     let player_ids = configuration
         .players
         .iter()
         .map(|player| player.id)
         .collect::<Vec<_>>();
-    let tanks = initial_tanks_for_players(&terrain, &player_ids);
+    let match_seed = MatchSeed(BattlefieldSeed(select_match_seed()));
+    let (terrain, tanks, dressing, wind) = generate_match_world(match_seed.0, &player_ids);
     let turn = initial_turn_state(&tanks);
     App::new()
         .add_plugins(DefaultPlugins)
         .insert_resource(Tanks(tanks))
         .insert_resource(CurrentTurn(turn))
         .insert_resource(BattlefieldState(terrain))
+        .insert_resource(match_seed)
+        .insert_resource(WorldDressing(dressing))
         .insert_resource(ProjectileFlight::default())
         .insert_resource(WeaponState::default())
         .insert_resource(LatestTerrainImpact::default())
@@ -338,7 +360,7 @@ fn main() {
         .insert_resource(BattlefieldGravity(
             Gravity::new(DEVELOPMENT_GRAVITY).expect("development gravity must be valid"),
         ))
-        .insert_resource(BattlefieldWind(select_match_wind()))
+        .insert_resource(BattlefieldWind(wind))
         .insert_resource(Time::<Fixed>::from_hz(PROJECTILE_FIXED_HZ))
         .add_systems(Startup, (spawn_battlefield_scene, spawn_match_setup))
         .add_systems(
@@ -377,16 +399,48 @@ fn spawn_battlefield_scene(
     tanks: Res<Tanks>,
     turn: Res<CurrentTurn>,
     terrain: Res<BattlefieldState>,
+    dressing: Res<WorldDressing>,
 ) {
     let camera = BattlefieldCamera::default();
     let transform = camera_transform(&camera);
-    commands.spawn((Camera3d::default(), camera, transform));
+    commands.spawn((
+        Camera3d::default(),
+        Projection::Perspective(PerspectiveProjection {
+            far: 300.0,
+            ..default()
+        }),
+        camera,
+        transform,
+    ));
 
     commands.spawn((
         BattlefieldVisual,
         Mesh3d(meshes.add(create_battlefield_mesh(&terrain.0))),
-        MeshMaterial3d(materials.add(Color::srgb(0.2, 0.42, 0.2))),
+        MeshMaterial3d(materials.add(Color::WHITE)),
     ));
+
+    commands.spawn((
+        WaterVisual,
+        Mesh3d(
+            meshes.add(
+                Plane3d::default()
+                    .mesh()
+                    .size(HALF_EXTENT * 2.0, HALF_EXTENT * 2.0),
+            ),
+        ),
+        MeshMaterial3d(materials.add(Color::srgb(0.04, 0.22, 0.70))),
+        Transform::from_xyz(0.0, WATER_TABLE, 0.0),
+    ));
+    let building_material = materials.add(Color::srgb(0.36, 0.38, 0.40));
+    spawn_buildings(
+        &mut commands,
+        &mut meshes,
+        &dressing.0,
+        building_material.clone(),
+    );
+    commands.insert_resource(WorldDressingAssets {
+        material: building_material,
+    });
 
     commands.spawn((
         DirectionalLight {
@@ -524,14 +578,23 @@ fn update_match_setup(
     mut tanks: ResMut<Tanks>,
     mut turn: ResMut<CurrentTurn>,
     mut weapons: ResMut<WeaponState>,
-    terrain: Res<BattlefieldState>,
+    world: (
+        ResMut<BattlefieldState>,
+        Res<MatchSeed>,
+        ResMut<WorldDressing>,
+        ResMut<BattlefieldWind>,
+    ),
+    dressing_render: (ResMut<Assets<Mesh>>, Res<WorldDressingAssets>),
     tank_meshes: Res<TankMeshes>,
     presentation: Res<TankPresentationAssets>,
     overlays: Query<Entity, With<MatchSetupOverlay>>,
     tank_visuals: Query<Entity, With<TankVisual>>,
+    building_visuals: Query<Entity, With<BuildingVisual>>,
     mut commands: Commands,
     mut details: Query<&mut Text, With<MatchSetupDetails>>,
 ) {
+    let (mut terrain, match_seed, mut dressing, mut wind) = world;
+    let (mut meshes, dressing_assets) = dressing_render;
     if gate.started {
         return;
     }
@@ -627,7 +690,12 @@ fn update_match_setup(
             .iter()
             .map(|player| player.id)
             .collect::<Vec<_>>();
-        tanks.0 = initial_tanks_for_players(&terrain.0, &ids);
+        let (generated, generated_tanks, generated_dressing, generated_wind) =
+            generate_match_world(match_seed.0, &ids);
+        terrain.0 = generated;
+        tanks.0 = generated_tanks;
+        dressing.0 = generated_dressing;
+        wind.0 = generated_wind;
         turn.0 = initial_turn_state(&tanks.0);
         weapons.0 = PlayerWeaponLoadouts::new(&ids);
         for entity in &tank_visuals {
@@ -646,6 +714,15 @@ fn update_match_setup(
                 active_firing_representation(tank, turn.0.aim_for(tank.owner)),
             );
         }
+        for entity in &building_visuals {
+            commands.entity(entity).despawn();
+        }
+        spawn_buildings(
+            &mut commands,
+            &mut meshes,
+            &dressing.0,
+            dressing_assets.material.clone(),
+        );
         gate.started = true;
         for overlay in &overlays {
             commands.entity(overlay).despawn();
@@ -1469,17 +1546,40 @@ fn tank_materials(materials: &mut Assets<StandardMaterial>) -> Vec<Handle<Standa
         .collect()
 }
 
-/// Selects one gentle, constant wind for the match. The sampled value becomes authoritative
-/// state immediately; it never changes during flight or a player's turn.
-fn select_match_wind() -> Wind {
-    if !WIND_ENABLED {
-        return Wind::new(WorldVector::ZERO).expect("calm wind must be valid");
-    }
-
-    let seed = SystemTime::now()
+fn select_match_seed() -> u64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_nanos() as u64);
-    wind_from_seed(seed)
+        .map_or(0, |duration| duration.as_nanos() as u64)
+}
+
+/// The labelled streams make visual dressing unable to perturb terrain, tank starts, or wind.
+/// The captured seed is printed so an interesting or broken battlefield can be reproduced.
+fn derived_seed(seed: BattlefieldSeed, label: &str) -> u64 {
+    label.bytes().fold(seed.0, |value, byte| {
+        value
+            .wrapping_mul(6_364_136_223_846_793_005)
+            .wrapping_add(byte as u64 + 1)
+    })
+}
+
+fn generate_match_world(
+    seed: BattlefieldSeed,
+    players: &[PlayerId],
+) -> (BattlefieldTerrain, Vec<Tank>, Vec<BuildingPlacement>, Wind) {
+    let terrain = BattlefieldTerrain::generated(BattlefieldSeed(derived_seed(seed, "terrain")));
+    let tanks = initial_tanks_for_players_seeded(&terrain, players, derived_seed(seed, "starts"));
+    let starts = tanks
+        .iter()
+        .map(|tank| (tank.pose.position.x, tank.pose.position.z))
+        .collect::<Vec<_>>();
+    let dressing = generate_buildings(&terrain, &starts, derived_seed(seed, "dressing"));
+    let wind = if WIND_ENABLED {
+        wind_from_seed(derived_seed(seed, "wind"))
+    } else {
+        Wind::new(WorldVector::ZERO).expect("calm wind must be valid")
+    };
+    eprintln!("Azimuth battlefield seed: {}", seed.0);
+    (terrain, tanks, dressing, wind)
 }
 
 /// Kept pure so a recorded seed recreates the same match condition in tests or diagnostics.
@@ -1522,7 +1622,7 @@ fn advance_projectile(
     let advance = shot.projectile.advance_with_terrain(
         gravity.0,
         wind.0,
-        SimulationLimits::DEVELOPMENT,
+        SimulationLimits::BATTLEFIELD,
         |x, z| terrain.0.height_if_within_bounds(x, z),
     );
     flight.0 = resolve_projectile_advance(
@@ -1949,8 +2049,30 @@ fn create_battlefield_mesh(terrain: &BattlefieldTerrain) -> Mesh {
         RenderAssetUsages::default(),
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, terrain.mesh_positions())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, terrain.mesh_colours())
     .with_inserted_indices(Indices::U32(terrain_mesh_indices()))
     .with_computed_smooth_normals()
+}
+
+fn spawn_buildings(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    buildings: &[BuildingPlacement],
+    material: Handle<StandardMaterial>,
+) {
+    for building in buildings {
+        commands.spawn((
+            BuildingVisual,
+            Mesh3d(meshes.add(Cuboid::new(building.width, building.height, building.depth))),
+            MeshMaterial3d(material.clone()),
+            Transform::from_xyz(
+                building.position.x,
+                building.position.y + building.height / 2.0,
+                building.position.z,
+            )
+            .with_rotation(Quat::from_rotation_y(building.yaw_radians)),
+        ));
+    }
 }
 
 #[cfg(test)]
@@ -2065,7 +2187,7 @@ mod tests {
     #[test]
     fn battlefield_camera_target_stays_within_visible_bounds() {
         assert_eq!(
-            clamp_camera_target(Vec3::new(30.0, 0.0, -30.0)),
+            clamp_camera_target(Vec3::new(90.0, 0.0, -90.0)),
             Vec3::new(HALF_EXTENT, 0.0, -HALF_EXTENT)
         );
     }
