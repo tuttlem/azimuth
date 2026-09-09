@@ -148,6 +148,11 @@ impl MatchConfiguration {
         if player.controller == ControllerType::Human
             && player.display_name.chars().count() < MAX_DISPLAY_NAME_LEN
         {
+            // "Player N" is an editable placeholder, not a prefix for the player's name.
+            if player.human_name == format!("Player {}", id.0) {
+                player.display_name.clear();
+                player.human_name.clear();
+            }
             player.display_name.push(character);
             player.human_name.push(character);
         }
@@ -295,5 +300,15 @@ mod tests {
         configuration.trim_human_names();
         assert_eq!(configuration.players[0].display_name, "Ada");
         assert!(configuration.validate().is_ok());
+    }
+
+    #[test]
+    fn typing_replaces_the_default_player_placeholder() {
+        let mut configuration = MatchConfiguration::default();
+        let id = configuration.players[0].id;
+        configuration.append_human_name_character(id, 'A');
+        configuration.append_human_name_character(id, 'd');
+        configuration.append_human_name_character(id, 'a');
+        assert_eq!(configuration.players[0].display_name, "Ada");
     }
 }

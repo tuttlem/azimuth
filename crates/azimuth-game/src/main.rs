@@ -19,6 +19,7 @@ use battlefield::{
 };
 use bevy::{
     asset::RenderAssetUsages,
+    camera::{Viewport, visibility::RenderLayers},
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
     mesh::Indices,
     prelude::*,
@@ -59,6 +60,12 @@ const PROJECTILE_FIXED_HZ: f64 = 120.0;
 const DEVELOPMENT_GRAVITY: f32 = 8.0;
 const MINIMUM_WIND_STRENGTH: f32 = 0.75;
 const MAXIMUM_WIND_STRENGTH: f32 = 1.75;
+/// The simulation's wind value is an acceleration.  The HUD presents the same relative
+/// intensity on a familiar, player-facing kilometres-per-hour scale.
+const WIND_KPH_PER_ACCELERATION: f32 = 10.0;
+const WIND_INDICATOR_RENDER_LAYER: usize = 1;
+const WIND_INDICATOR_WIDTH: u32 = 150;
+const WIND_INDICATOR_HEIGHT: u32 = 52;
 const WIND_ENABLED: bool = true;
 const EXPLOSION_VISUAL_DURATION_SECONDS: f32 = 0.6;
 const EXPLOSION_INITIAL_SCALE: f32 = 0.35;
@@ -258,7 +265,10 @@ struct HudScoreboardText(PlayerId);
 struct HudScoreboardRow(PlayerId);
 
 #[derive(Component)]
-struct HudWindMarker;
+struct WindIndicatorCamera;
+
+#[derive(Component)]
+struct WindIndicatorArrow;
 
 #[derive(Component)]
 struct HudActivePlayerPanel;
@@ -321,8 +331,6 @@ type HudDecorations<'w, 's> = Query<
     'w,
     's,
     (
-        &'static mut Node,
-        Option<&'static HudWindMarker>,
         Option<&'static mut BorderColor>,
         Option<&'static HudActivePlayerPanel>,
     ),
@@ -420,6 +428,7 @@ fn main() {
                     sync_tank_pose,
                     sync_tank_elimination,
                     sync_tank_aim,
+                    update_wind_indicator_overlay,
                     launch_aimed_projectile,
                     sync_tactical_hud,
                     sync_projectile_visual,
@@ -450,6 +459,7 @@ fn spawn_battlefield_scene(
     let transform = camera_transform(&camera);
     commands.spawn((
         Camera3d::default(),
+        IsDefaultUiCamera,
         Projection::Perspective(PerspectiveProjection {
             far: 300.0,
             ..default()
@@ -457,6 +467,7 @@ fn spawn_battlefield_scene(
         camera,
         transform,
     ));
+    spawn_wind_indicator_overlay(&mut commands, &mut meshes, &mut materials);
 
     commands.spawn((
         BattlefieldVisual,
@@ -557,6 +568,76 @@ fn spawn_battlefield_scene(
     });
 }
 
+/// This is a separate render-layer viewport, not a battlefield entity.  It gives the wind cue
+/// genuine perspective and lighting while keeping it permanently outside the playable scene.
+fn spawn_wind_indicator_overlay(
+    commands: &mut Commands,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) {
+    let layer = RenderLayers::layer(WIND_INDICATOR_RENDER_LAYER);
+    commands.spawn((
+        WindIndicatorCamera,
+        Camera3d::default(),
+        Camera {
+            order: 1,
+            clear_color: ClearColorConfig::None,
+            ..default()
+        },
+        Projection::Perspective(PerspectiveProjection {
+            fov: 28.0_f32.to_radians(),
+            near: 0.1,
+            far: 30.0,
+            ..default()
+        }),
+        Transform::from_xyz(0.0, 2.2, 6.5).looking_at(Vec3::ZERO, Vec3::Y),
+        layer.clone(),
+        Visibility::Hidden,
+    ));
+    commands.spawn((
+        PointLight {
+            intensity: 90_000.0,
+            range: 20.0,
+            shadows_enabled: false,
+            ..default()
+        },
+        Transform::from_xyz(-2.0, 4.0, 4.0),
+        layer.clone(),
+    ));
+    commands
+        .spawn((
+            WindIndicatorArrow,
+            Transform::default(),
+            Visibility::Hidden,
+            layer.clone(),
+        ))
+        .with_children(|arrow| {
+            arrow.spawn((
+                Mesh3d(meshes.add(Cylinder::new(0.13, 2.6))),
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.16, 0.43, 0.82),
+                    metallic: 0.45,
+                    perceptual_roughness: 0.25,
+                    ..default()
+                })),
+                Transform::from_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
+                layer.clone(),
+            ));
+            arrow.spawn((
+                Mesh3d(meshes.add(Cone::new(0.48, 1.15))),
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color: Color::srgb(0.98, 0.73, 0.12),
+                    metallic: 0.3,
+                    perceptual_roughness: 0.2,
+                    ..default()
+                })),
+                Transform::from_translation(Vec3::X * 1.75)
+                    .with_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
+                layer,
+            ));
+        });
+}
+
 fn spawn_match_setup(mut commands: Commands) {
     commands
         .spawn((
@@ -603,7 +684,7 @@ fn spawn_match_setup(mut commands: Commands) {
                 ));
                 setup_text(
                     panel,
-                    "2–8: COUNT | TAB: SLOT | TYPE: NAME | CTRL+C: HUMAN/AI | CTRL+R: REROLL AI",
+                    "2–8: COUNT | UP/DOWN: SLOT | TYPE: NAME | CTRL+C: HUMAN/AI | CTRL+R: REROLL AI",
                     16.0,
                     Color::srgb(0.6, 0.75, 0.9),
                 );
@@ -670,7 +751,12 @@ fn update_match_setup(
             .expect("setup controls use valid counts");
         gate.selected_slot = gate.selected_slot.min(count - 1);
     }
-    if keyboard.just_pressed(KeyCode::Tab) {
+    if keyboard.just_pressed(KeyCode::ArrowUp) {
+        gate.selected_slot = gate
+            .selected_slot
+            .checked_sub(1)
+            .unwrap_or(configuration.0.players.len() - 1);
+    } else if keyboard.just_pressed(KeyCode::ArrowDown) {
         gate.selected_slot = (gate.selected_slot + 1) % configuration.0.players.len();
     }
     let control_held =
@@ -1288,10 +1374,58 @@ fn sync_tank_elimination(tanks: Res<Tanks>, mut visuals: Query<(&TankVisual, &mu
     }
 }
 
+/// Keeps the isolated wind viewport aligned with its UI reservation and rotates its mesh from the
+/// active player's live turret aim.  Neither the camera nor its arrow participates in gameplay
+/// visibility, collision, or the battlefield render layer.
+fn update_wind_indicator_overlay(
+    setup: Res<MatchSetupGate>,
+    turn: Res<CurrentTurn>,
+    wind: Res<BattlefieldWind>,
+    window: Single<&Window>,
+    camera: Single<
+        (&mut Camera, &mut Visibility, &mut Transform),
+        (With<WindIndicatorCamera>, Without<WindIndicatorArrow>),
+    >,
+    arrow: Single<
+        (&mut Transform, &mut Visibility),
+        (With<WindIndicatorArrow>, Without<WindIndicatorCamera>),
+    >,
+) {
+    let (mut camera, mut camera_visibility, mut camera_transform) = camera.into_inner();
+    let (mut arrow, mut arrow_visibility) = arrow.into_inner();
+    let visible = setup.started;
+    *camera_visibility = if visible {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+    *arrow_visibility = if visible {
+        Visibility::Visible
+    } else {
+        Visibility::Hidden
+    };
+
+    let scale = window.scale_factor();
+    let width = (WIND_INDICATOR_WIDTH as f32 * scale).round() as u32;
+    let height = (WIND_INDICATOR_HEIGHT as f32 * scale).round() as u32;
+    camera.viewport = Some(Viewport {
+        physical_position: UVec2::new(
+            window.physical_width().saturating_sub(width) / 2,
+            (16.0 * scale).round() as u32,
+        ),
+        physical_size: UVec2::new(width, height),
+        ..default()
+    });
+    let aim = (turn.0.match_state == MatchState::InProgress).then(|| turn.0.current_aim());
+    *camera_transform = wind_indicator_camera_transform(aim);
+    arrow.rotation = Quat::from_rotation_y(wind_arrow_rotation(wind.0));
+}
+
 fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) {
     commands
         .spawn((
             TacticalHud,
+            Visibility::Hidden,
             Node {
                 width: percent(100),
                 height: percent(100),
@@ -1341,66 +1475,32 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
             .with_children(|p| {
                 hud_text(p, HudTextField::Aim, 17.0);
                 hud_text(p, HudTextField::Weapon, 16.0);
-                hud_text(p, HudTextField::Wind, 16.0);
-                p.spawn((
-                    BackgroundColor(Color::srgba(0.08, 0.12, 0.16, 0.9)),
-                    Node {
-                        width: px(96),
-                        height: px(76),
-                        position_type: PositionType::Relative,
-                        ..default()
-                    },
-                ))
-                .with_children(|plot| {
-                    plot.spawn((
-                        BackgroundColor(Color::srgba(0.7, 0.75, 0.8, 0.6)),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            left: px(8),
-                            right: px(8),
-                            top: px(37),
-                            height: px(1),
-                            ..default()
-                        },
-                    ));
-                    plot.spawn((
-                        BackgroundColor(Color::srgba(0.7, 0.75, 0.8, 0.6)),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            top: px(8),
-                            bottom: px(8),
-                            left: px(47),
-                            width: px(1),
-                            ..default()
-                        },
-                    ));
-                    plot.spawn((
-                        Text::new("+Z      +X"),
-                        TextFont {
-                            font_size: 11.,
-                            ..default()
-                        },
-                        TextColor(Color::WHITE),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            top: px(1),
-                            left: px(48),
-                            ..default()
-                        },
-                    ));
-                    plot.spawn((
-                        HudWindMarker,
-                        BackgroundColor(Color::srgb(0.95, 0.8, 0.2)),
-                        Node {
-                            position_type: PositionType::Absolute,
-                            width: px(8),
-                            height: px(8),
-                            left: px(44),
-                            top: px(33),
-                            ..default()
-                        },
-                    ));
+            });
+            root.spawn((
+                BackgroundColor(Color::srgba(0.03, 0.05, 0.08, 0.82)),
+                BorderColor::all(Color::srgb(0.55, 0.7, 0.9)),
+                Node {
+                    position_type: PositionType::Absolute,
+                    top: px(16),
+                    left: percent(50),
+                    width: px(150),
+                    margin: UiRect::left(px(-75)),
+                    padding: UiRect::vertical(px(5)),
+                    align_items: AlignItems::Center,
+                    flex_direction: FlexDirection::Column,
+                    border: UiRect::all(px(2)),
+                    ..default()
+                },
+            ))
+            .with_children(|wind| {
+                // The indicator camera occupies this reserved space. Keeping this node in the UI
+                // layout places the KPH readout directly beneath the 3D overlay viewport.
+                wind.spawn(Node {
+                    width: px(WIND_INDICATOR_WIDTH as f32),
+                    height: px(WIND_INDICATOR_HEIGHT as f32),
+                    ..default()
                 });
+                hud_text(wind, HudTextField::Wind, 15.0);
             });
             root.spawn((
                 BackgroundColor(Color::srgba(0.03, 0.05, 0.08, 0.82)),
@@ -1554,6 +1654,7 @@ fn scoreboard_entries(
 // The grouped reads are intentionally explicit so every HUD source remains visibly read-only.
 #[allow(clippy::too_many_arguments)]
 fn sync_tactical_hud(
+    setup: Res<MatchSetupGate>,
     turn: Res<CurrentTurn>,
     tanks: Res<Tanks>,
     weapons: Res<WeaponState>,
@@ -1565,6 +1666,7 @@ fn sync_tactical_hud(
     mut fills: Query<(&HudHealthFill, &mut Node)>,
     mut rows: Query<(&HudScoreboardRow, &mut BorderColor, &mut BackgroundColor)>,
     mut decorations: HudDecorations,
+    mut huds: Query<&mut Visibility, With<TacticalHud>>,
 ) {
     let view = tactical_hud_view(
         turn.0.clone(),
@@ -1623,12 +1725,14 @@ fn sync_tactical_hud(
     let active_colour = view
         .active_player
         .map_or(Color::srgb(0.45, 0.45, 0.45), player_color);
-    let (x, z) = wind_plot_offset(view.wind);
-    for (mut node, wind_marker, border, active_panel) in &mut decorations {
-        if wind_marker.is_some() {
-            node.left = px(44.0 + x);
-            node.top = px(33.0 - z);
-        }
+    for mut visibility in &mut huds {
+        *visibility = if setup.started {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for (border, active_panel) in &mut decorations {
         if active_panel.is_some()
             && let Some(mut border) = border
         {
@@ -1679,17 +1783,22 @@ fn configured_match_text(view: &TacticalHudView, configuration: &MatchConfigurat
     }
 }
 
-/// Maps world wind to the small HUD plot: +X is right and +Z is up.  The
-/// normalisation deliberately represents direction while the adjacent number
-/// represents strength; calm wind stays at the axis origin.
-fn wind_plot_offset(wind: Wind) -> (f32, f32) {
+/// The arrow retains the actual world wind direction; its dedicated camera supplies the active
+/// turret-relative frame, so a head-on wind visibly travels into or out of the screen.
+fn wind_arrow_rotation(wind: Wind) -> f32 {
     let vector = wind.horizontal_acceleration();
     let strength = wind.strength();
     if strength == 0.0 {
-        (0.0, 0.0)
+        0.0
     } else {
-        (vector.x / strength * 24.0, vector.z / strength * 24.0)
+        (-vector.z).atan2(vector.x)
     }
+}
+
+fn wind_indicator_camera_transform(aim: Option<AimingState>) -> Transform {
+    let azimuth = aim.map_or(0.0, |aim| aim.azimuth_degrees.to_radians());
+    let position = Quat::from_rotation_y(-azimuth) * Vec3::new(0.0, 2.2, 6.5);
+    Transform::from_translation(position).looking_at(Vec3::ZERO, Vec3::Y)
 }
 
 fn hud_field_text(field: HudTextField, view: &TacticalHudView) -> String {
@@ -1728,15 +1837,10 @@ fn hud_field_text(field: HudTextField, view: &TacticalHudView) -> String {
                 }
             },
         ),
-        HudTextField::Wind => {
-            let a = view.wind.horizontal_acceleration();
-            format!(
-                "WIND {:.1}\nX {:+.1}  Z {:+.1}",
-                view.wind.strength(),
-                a.x,
-                a.z
-            )
-        }
+        HudTextField::Wind => format!(
+            "{:.0} KPH",
+            view.wind.strength() * WIND_KPH_PER_ACCELERATION
+        ),
         HudTextField::Movement => view.movement.map_or_else(String::new, |(s, r)| {
             format!(
                 "MOVE: {s} LEFT{}",
@@ -2856,7 +2960,7 @@ mod tests {
     }
 
     #[test]
-    fn hud_wind_plot_uses_ascii_world_axes_and_keeps_calm_at_origin() {
+    fn wind_arrow_preserves_world_direction_while_its_camera_follows_the_turret() {
         let calm = Wind::new(WorldVector::ZERO).unwrap();
         let positive_x = Wind::new(WorldVector {
             x: 1.0,
@@ -2864,30 +2968,13 @@ mod tests {
             z: 0.0,
         })
         .unwrap();
-        let negative_x = Wind::new(WorldVector {
-            x: -1.0,
-            y: 0.0,
-            z: 0.0,
-        })
-        .unwrap();
-        let positive_z = Wind::new(WorldVector {
-            x: 0.0,
-            y: 0.0,
-            z: 1.0,
-        })
-        .unwrap();
-        let negative_z = Wind::new(WorldVector {
-            x: 0.0,
-            y: 0.0,
-            z: -1.0,
-        })
-        .unwrap();
+        let north = wind_indicator_camera_transform(Some(AimingState::new(0.0, 45.0, 18.0)));
+        let east = wind_indicator_camera_transform(Some(AimingState::new(90.0, 45.0, 18.0)));
 
-        assert_eq!(wind_plot_offset(calm), (0.0, 0.0));
-        assert_eq!(wind_plot_offset(positive_x), (24.0, 0.0));
-        assert_eq!(wind_plot_offset(negative_x), (-24.0, 0.0));
-        assert_eq!(wind_plot_offset(positive_z), (0.0, 24.0));
-        assert_eq!(wind_plot_offset(negative_z), (0.0, -24.0));
+        assert_eq!(wind_arrow_rotation(calm), 0.0);
+        assert!((wind_arrow_rotation(positive_x)).abs() < 0.01);
+        assert!(north.translation.z > 6.0);
+        assert!(east.translation.x < -6.0);
     }
 
     #[test]

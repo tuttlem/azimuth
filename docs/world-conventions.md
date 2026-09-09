@@ -62,10 +62,9 @@ development defaults.
   gentle 0.75–1.75 units/s² strength are selected once when a match begins. It affects projectile
   position and velocity on each fixed simulation step, so its displacement accumulates with flight
   time.
-- The graphical tactical HUD shows wind strength plus a world-axis plot. `+X` is drawn to the
-  right and `+Z` upward; its marker is displaced in the direction the wind accelerates a
-  projectile. The plot is camera- and barrel-independent, so it does not reveal an opponent's
-  position or change as the camera transitions. Calm wind leaves the marker at the origin.
+- The graphical tactical HUD shows a compact, isolated 3D wind-arrow overlay at its top. The arrow
+  follows the active player's live turret-aiming frame, with perspective for wind travelling into
+  or out of the screen; the equivalent KPH intensity is directly below it. Calm wind remains level.
 - Wind has no Y component in this first model. Gravity remains the only vertical environmental
   acceleration, and wind does not affect tanks, movement, support settling, explosions, terrain,
   or camera presentation.

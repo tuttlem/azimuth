@@ -99,9 +99,9 @@ The camera presents the current turn and fired shots without owning gameplay tim
   Selecting does not spend ammunition; Space commits the selected available weapon and spends one
   finite round only when the shot begins. After a player's final HE or Heavy Shell round, selection
   safely returns to Basic Shell.
-- The graphical tactical HUD keeps wind strength beside an ASCII-safe world-axis plot: `+X` is
-  right and `+Z` is up. Its marker points toward the direction the wind pushes a projectile. It is
-  intentionally world-relative rather than camera-relative.
+- The graphical tactical HUD shows a compact, isolated 3D wind-arrow overlay at its top. It is
+  oriented from the active player's turret perspective, includes visible depth for wind travelling
+  into or out of the screen, and displays the intensity beneath it in KPH.
 - Press M to choose movement. The arrow keys request one cardinal step relative to the current
   camera view: Up moves into the view, Down moves out, and Left/Right move across it. At diagonal
   camera angles the nearest cardinal world step is selected. A movement action starts with six
