@@ -292,7 +292,10 @@ struct TacticalHudView {
 struct ScoreboardEntry {
     player: PlayerId,
     display_name: String,
-    health: u8,
+    /// A setup screen can contain newly configured slots before their tanks are generated.
+    /// Keeping this optional makes the scoreboard presentation follow configuration without
+    /// pretending those slots are eliminated gameplay entities.
+    health: Option<u8>,
     eliminated: bool,
     active: bool,
 }
@@ -919,7 +922,7 @@ fn update_movement_input(
         return;
     }
     if keyboard.just_pressed(KeyCode::Enter) {
-        if turn.0.finish_movement() {
+        if turn.0.finish_movement(survivors(&tanks.0)) {
             feedback.0 = None;
         }
         return;
@@ -933,7 +936,7 @@ fn update_movement_input(
         Ok(moved) => {
             *tank_for_player_mut(&mut tanks.0, player) = moved;
             assert!(
-                turn.0.accept_movement_step(),
+                turn.0.accept_movement_step(survivors(&tanks.0)),
                 "moving turn must consume accepted step"
             );
             feedback.0 = None;
@@ -1428,12 +1431,12 @@ fn scoreboard_entries(
         .players
         .iter()
         .map(|player| {
-            let tank = tank_for_player(tanks, player.id);
+            let tank = tanks.iter().find(|tank| tank.owner == player.id);
             ScoreboardEntry {
                 player: player.id,
                 display_name: player.display_name.clone(),
-                health: tank.health,
-                eliminated: tank.is_eliminated(),
+                health: tank.map(|tank| tank.health),
+                eliminated: tank.is_some_and(|tank| tank.is_eliminated()),
                 active: turn.match_state == MatchState::InProgress
                     && turn.phase != TurnPhase::ResolvingFire
                     && turn.current_player == player.id,
@@ -1487,7 +1490,7 @@ fn sync_tactical_hud(
             .iter()
             .find(|entry| entry.player == fill.0)
             .expect("every retained scoreboard fill must have a configured player");
-        node.width = percent(entry.health as f32 / MAX_HEALTH as f32 * 100.0);
+        node.width = percent(entry.health.unwrap_or_default() as f32 / MAX_HEALTH as f32 * 100.0);
     }
     for (row, mut border, mut background) in &mut rows {
         let entry = view
@@ -1535,8 +1538,10 @@ fn sync_tactical_hud(
 fn scoreboard_entry_text(entry: &ScoreboardEntry) -> String {
     if entry.eliminated {
         format!("{}: OUT", entry.display_name)
+    } else if let Some(health) = entry.health {
+        format!("{}: {health}/{MAX_HEALTH}", entry.display_name)
     } else {
-        format!("{}: {}/{}", entry.display_name, entry.health, MAX_HEALTH)
+        format!("{}: READY", entry.display_name)
     }
 }
 
@@ -2306,7 +2311,7 @@ mod tests {
                 ids
             );
             assert_eq!(entries[0].display_name, "Commander 1");
-            assert_eq!(entries[count - 1].health, 0);
+            assert_eq!(entries[count - 1].health, Some(0));
             assert!(entries[count - 1].eliminated);
             assert!(entries[0].active);
 
@@ -2316,6 +2321,29 @@ mod tests {
                 scoreboard_entries(&configuration, &tanks, &resolving)
                     .iter()
                     .all(|entry| !entry.active)
+            );
+        }
+    }
+
+    #[test]
+    fn scoreboard_keeps_new_setup_slots_visible_before_their_tanks_are_generated() {
+        let configuration = MatchConfiguration::with_player_count(8).unwrap();
+        let tanks = initial_tanks(&BattlefieldTerrain::initial());
+        let turn = initial_turn_state(tanks);
+
+        let entries = scoreboard_entries(&configuration, &tanks, &turn);
+
+        assert_eq!(entries.len(), 8);
+        assert_eq!(entries[0].health, Some(MAX_HEALTH));
+        assert_eq!(entries[1].health, Some(MAX_HEALTH));
+        assert!(entries[0].active);
+        for entry in &entries[2..] {
+            assert_eq!(entry.health, None);
+            assert!(!entry.eliminated);
+            assert!(!entry.active);
+            assert_eq!(
+                scoreboard_entry_text(entry),
+                format!("{}: READY", entry.display_name)
             );
         }
     }
@@ -2819,7 +2847,7 @@ mod tests {
         );
 
         assert!(turn.begin_movement());
-        assert!(turn.finish_movement());
+        assert!(turn.finish_movement([true, true]));
         assert_eq!(
             camera_presentation_intent(turn, None),
             CameraPresentationIntent::ActivePlayer(PlayerId::Two)
@@ -2919,8 +2947,8 @@ mod tests {
             .unwrap();
         tanks[0] = moved;
         assert!(turn.begin_movement());
-        assert!(turn.accept_movement_step());
-        assert!(turn.finish_movement());
+        assert!(turn.accept_movement_step([true, true]));
+        assert!(turn.finish_movement([true, true]));
         assert!(turn.begin_fire().is_some());
         assert!(turn.complete_fire_resolution([true, true]));
 

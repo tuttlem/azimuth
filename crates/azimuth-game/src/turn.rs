@@ -82,7 +82,7 @@ impl TurnState {
             _ => None,
         }
     }
-    pub fn accept_movement_step(&mut self) -> bool {
+    pub fn accept_movement_step(&mut self, survivors: impl AsRef<[bool]>) -> bool {
         let TurnPhase::Moving { remaining_steps } = self.phase else {
             return false;
         };
@@ -90,7 +90,7 @@ impl TurnState {
             return false;
         }
         if remaining_steps == 1 {
-            self.advance(&vec![true; self.players.len()]);
+            self.advance(survivors.as_ref());
         } else {
             self.phase = TurnPhase::Moving {
                 remaining_steps: remaining_steps - 1,
@@ -98,11 +98,11 @@ impl TurnState {
         }
         true
     }
-    pub fn finish_movement(&mut self) -> bool {
+    pub fn finish_movement(&mut self, survivors: impl AsRef<[bool]>) -> bool {
         if self.match_state != MatchState::InProgress || self.remaining_movement().is_none() {
             return false;
         }
-        self.advance(&vec![true; self.players.len()]);
+        self.advance(survivors.as_ref());
         true
     }
     pub fn begin_fire(&mut self) -> Option<(PlayerId, AimingState)> {
@@ -167,7 +167,7 @@ mod tests {
         let mut s = state(8);
         for _ in 0..8 {
             s.begin_movement();
-            s.finish_movement();
+            s.finish_movement([true; 8]);
         }
         assert_eq!(s.current_player, PlayerId(1));
     }
@@ -176,6 +176,17 @@ mod tests {
         let mut s = state(4);
         s.begin_fire();
         s.complete_fire_resolution([true, false, false, true]);
+        assert_eq!(s.current_player, PlayerId(4));
+    }
+    #[test]
+    fn movement_handoff_skips_eliminated_players() {
+        let mut s = state(4);
+        s.begin_movement();
+        assert!(s.finish_movement([true, false, true, true]));
+        assert_eq!(s.current_player, PlayerId(3));
+
+        s.begin_movement();
+        assert!(s.finish_movement([true, false, true, true]));
         assert_eq!(s.current_player, PlayerId(4));
     }
     #[test]
