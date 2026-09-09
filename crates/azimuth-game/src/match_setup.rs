@@ -85,7 +85,6 @@ pub enum MatchConfigurationError {
     DuplicateIdentity,
     EmptyName,
     NameTooLong,
-    AiUnavailable,
 }
 
 impl Default for MatchConfiguration {
@@ -237,13 +236,6 @@ impl MatchConfiguration {
         {
             return Err(MatchConfigurationError::DuplicateIdentity);
         }
-        if self
-            .players
-            .iter()
-            .any(|player| player.controller == ControllerType::Ai)
-        {
-            return Err(MatchConfigurationError::AiUnavailable);
-        }
         Ok(())
     }
 }
@@ -274,14 +266,14 @@ mod tests {
         );
     }
     #[test]
-    fn ai_keeps_identity_colour_and_blocks_start() {
+    fn ai_keeps_identity_colour_and_can_start() {
         let mut c = MatchConfiguration::default();
         let before = c.players[0].clone();
         c.set_controller(before.id, ControllerType::Ai);
         assert_eq!(c.players[0].id, before.id);
         assert_eq!(c.players[0].visual, before.visual);
         assert!(AI_NAMES.contains(&c.players[0].display_name.as_str()));
-        assert_eq!(c.validate(), Err(MatchConfigurationError::AiUnavailable));
+        assert!(c.validate().is_ok());
     }
 
     #[test]

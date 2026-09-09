@@ -55,6 +55,17 @@ impl TurnState {
     pub fn current_aim(&self) -> AimingState {
         self.aim_for(self.current_player)
     }
+    pub fn set_current_aim(&mut self, aim: AimingState) -> bool {
+        if self.match_state != MatchState::InProgress || self.phase != TurnPhase::Choosing {
+            return false;
+        }
+        self.aims
+            .iter_mut()
+            .find(|(id, _)| *id == self.current_player)
+            .expect("active aim")
+            .1 = aim;
+        true
+    }
     pub fn apply_current_aim(&mut self, adjustment: AimAdjustment, coarse: bool) -> bool {
         if self.match_state != MatchState::InProgress || self.phase != TurnPhase::Choosing {
             return false;
@@ -177,6 +188,15 @@ mod tests {
         s.begin_fire();
         s.complete_fire_resolution([true, false, false, true]);
         assert_eq!(s.current_player, PlayerId(4));
+    }
+    #[test]
+    fn current_aim_can_only_change_during_a_choosing_turn() {
+        let mut s = state(2);
+        let aim = AimingState::new(99.0, 70.0, 25.0);
+        assert!(s.set_current_aim(aim));
+        assert_eq!(s.current_aim(), aim);
+        assert!(s.begin_fire().is_some());
+        assert!(!s.set_current_aim(AimingState::new(0.0, 5.0, 8.0)));
     }
     #[test]
     fn movement_handoff_skips_eliminated_players() {

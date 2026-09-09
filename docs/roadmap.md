@@ -698,7 +698,7 @@ Battlefields should differ through physical rules as well as terrain.
 # 17. Match Setup
 
 * [x] Select number of players.
-* [x] Select human/AI players at match configuration time; AI opponents remain unavailable.
+* [x] Select human/AI players at match configuration time; AI opponents are available.
 * [ ] Select battlefield.
 * [ ] Select environment preset.
 * [ ] Select random seed where appropriate.
@@ -761,12 +761,12 @@ It does not need to behave like a sophisticated military planner.
 
 ## Basic AI
 
-* [ ] Select targets.
+* [x] Select targets.
 * [ ] Choose weapon.
-* [ ] Choose azimuth.
-* [ ] Choose elevation.
-* [ ] Choose firing power.
-* [ ] Fire.
+* [x] Choose azimuth.
+* [x] Choose elevation.
+* [x] Choose firing power.
+* [x] Fire.
 * [ ] Occasionally move instead of firing.
 
 ## AI Skill Levels

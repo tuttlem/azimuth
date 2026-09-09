@@ -1,3 +1,4 @@
+mod ai;
 mod aiming;
 mod battlefield;
 mod combat;
@@ -10,6 +11,7 @@ mod world;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use ai::decide_firing;
 use aiming::{AimAdjustment, AimingState};
 use battlefield::{
     BattlefieldSeed, BattlefieldTerrain, BuildingPlacement, HALF_EXTENT, VisualHorizon,
@@ -118,6 +120,9 @@ struct BattlefieldState(BattlefieldTerrain);
 
 #[derive(Resource, Clone, Copy)]
 struct MatchSeed(BattlefieldSeed);
+
+#[derive(Resource)]
+struct AiDecisionSeed(u64);
 
 #[derive(Resource, Default)]
 struct WorldDressing(Vec<BuildingPlacement>);
@@ -337,6 +342,13 @@ type BattlefieldSceneResources<'w> = (
     Res<'w, MatchSeed>,
     Res<'w, PendingMatchConfiguration>,
 );
+type MatchSetupWorldResources<'w> = (
+    ResMut<'w, BattlefieldState>,
+    Res<'w, MatchSeed>,
+    ResMut<'w, WorldDressing>,
+    ResMut<'w, BattlefieldWind>,
+    ResMut<'w, AiDecisionSeed>,
+);
 
 impl Default for BattlefieldCamera {
     fn default() -> Self {
@@ -375,6 +387,7 @@ fn main() {
         .insert_resource(CurrentTurn(turn))
         .insert_resource(BattlefieldState(terrain))
         .insert_resource(match_seed)
+        .insert_resource(AiDecisionSeed(derived_seed(match_seed.0, "ai")))
         .insert_resource(WorldDressing(dressing))
         .insert_resource(ProjectileFlight::default())
         .insert_resource(WeaponState::default())
@@ -393,22 +406,29 @@ fn main() {
         .add_systems(
             Update,
             (
-                update_battlefield_camera,
-                update_match_setup,
-                select_weapon_input,
-                select_movement_action,
-                update_aiming_input,
-                update_movement_input,
-                sync_tank_pose,
-                sync_tank_elimination,
-                sync_tank_aim,
-                launch_aimed_projectile,
-                sync_tactical_hud,
-                sync_projectile_visual,
-                sync_impact_marker,
-                sync_terrain_impact_explosion,
-                update_explosion_visuals,
-                sync_battlefield_mesh,
+                (
+                    update_battlefield_camera,
+                    update_match_setup,
+                    select_weapon_input,
+                    select_movement_action,
+                    update_aiming_input,
+                    update_movement_input,
+                )
+                    .chain(),
+                (
+                    run_ai_controller,
+                    sync_tank_pose,
+                    sync_tank_elimination,
+                    sync_tank_aim,
+                    launch_aimed_projectile,
+                    sync_tactical_hud,
+                    sync_projectile_visual,
+                    sync_impact_marker,
+                    sync_terrain_impact_explosion,
+                    update_explosion_visuals,
+                    sync_battlefield_mesh,
+                )
+                    .chain(),
             )
                 .chain(),
         )
@@ -616,12 +636,7 @@ fn update_match_setup(
     mut tanks: ResMut<Tanks>,
     mut turn: ResMut<CurrentTurn>,
     mut weapons: ResMut<WeaponState>,
-    world: (
-        ResMut<BattlefieldState>,
-        Res<MatchSeed>,
-        ResMut<WorldDressing>,
-        ResMut<BattlefieldWind>,
-    ),
+    world: MatchSetupWorldResources,
     dressing_render: (ResMut<Assets<Mesh>>, Res<WorldDressingAssets>),
     tank_meshes: Res<TankMeshes>,
     presentation: Res<TankPresentationAssets>,
@@ -632,7 +647,7 @@ fn update_match_setup(
     mut commands: Commands,
     mut details: Query<&mut Text, With<MatchSetupDetails>>,
 ) {
-    let (mut terrain, match_seed, mut dressing, mut wind) = world;
+    let (mut terrain, match_seed, mut dressing, mut wind, mut ai_seed) = world;
     let (mut meshes, dressing_assets) = dressing_render;
     if gate.started {
         return;
@@ -708,9 +723,6 @@ fn update_match_setup(
         .join("\n");
     let validation_message = match configuration.0.validate() {
         Ok(()) => "ENTER: START MATCH".to_owned(),
-        Err(match_setup::MatchConfigurationError::AiUnavailable) => {
-            "AI opponents are not available yet. Change every slot to Human to start.".to_owned()
-        }
         Err(error) => format!("Cannot start: {error:?}"),
     };
     for mut text in &mut details {
@@ -737,6 +749,8 @@ fn update_match_setup(
         wind.0 = generated_wind;
         turn.0 = initial_turn_state(&tanks.0);
         weapons.0 = PlayerWeaponLoadouts::new(&ids);
+        // Gameplay AI gets its own labeled stream; setup names and scenery cannot perturb it.
+        ai_seed.0 = derived_seed(match_seed.0, "ai");
         for entity in &tank_visuals {
             commands.entity(entity).despawn();
         }
@@ -825,6 +839,7 @@ fn setup_name_character(keyboard: &ButtonInput<KeyCode>) -> Option<char> {
 fn launch_aimed_projectile(
     keyboard: Res<ButtonInput<KeyCode>>,
     setup: Res<MatchSetupGate>,
+    configuration: Res<PendingMatchConfiguration>,
     tanks: Res<Tanks>,
     assets: Res<ProjectileVisualAssets>,
     mut flight: ResMut<ProjectileFlight>,
@@ -835,6 +850,7 @@ fn launch_aimed_projectile(
 ) {
     if !setup.started
         || !keyboard.just_pressed(KeyCode::Space)
+        || !current_player_is_human(&configuration.0, &turn.0)
         || flight.0.is_some()
         || turn.0.match_state != MatchState::InProgress
         || turn.0.phase != TurnPhase::Choosing
@@ -842,14 +858,41 @@ fn launch_aimed_projectile(
         return;
     }
 
-    let player = turn.0.current_player;
-    let Some(definition) = weapons.0.for_player_mut(player).commit_selected() else {
-        return;
+    fire_current_player(
+        &tanks.0,
+        &assets,
+        &mut flight.0,
+        &mut latest_impact,
+        &mut weapons.0,
+        &mut turn.0,
+        &mut commands,
+    );
+}
+
+#[allow(clippy::too_many_arguments)]
+fn fire_current_player(
+    tanks: &[Tank],
+    assets: &ProjectileVisualAssets,
+    flight: &mut Option<FiredShot>,
+    latest_impact: &mut LatestTerrainImpact,
+    weapons: &mut PlayerWeaponLoadouts,
+    turn: &mut TurnState,
+    commands: &mut Commands,
+) -> bool {
+    if flight.is_some()
+        || turn.match_state != MatchState::InProgress
+        || turn.phase != TurnPhase::Choosing
+    {
+        return false;
+    }
+    let player = turn.current_player;
+    let Some(definition) = weapons.for_player_mut(player).commit_selected() else {
+        return false;
     };
-    let Some((player, aiming)) = turn.0.begin_fire() else {
+    let Some((player, aiming)) = turn.begin_fire() else {
         unreachable!("choosing player with a committed weapon must begin fire");
     };
-    let tank = tank_for_player(&tanks.0, player);
+    let tank = tank_for_player(tanks, player);
     let parameters = launch_parameters_for_aim(tank, aiming);
     let projectile =
         Projectile::launch_with_wind_response(parameters, definition.projectile.wind_response);
@@ -862,20 +905,67 @@ fn launch_aimed_projectile(
         MeshMaterial3d(assets.material.clone()),
         Transform::from_translation(to_bevy_position(shot.projectile.position)),
     ));
-    flight.0 = Some(shot);
+    *flight = Some(shot);
     latest_impact.impact = None;
     latest_impact.explosion_visual_scale = 1.0;
+    true
+}
+
+fn current_player_is_human(configuration: &MatchConfiguration, turn: &TurnState) -> bool {
+    configuration
+        .players
+        .iter()
+        .find(|player| player.id == turn.current_player)
+        .is_some_and(|player| player.controller == ControllerType::Human)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn run_ai_controller(
+    setup: Res<MatchSetupGate>,
+    configuration: Res<PendingMatchConfiguration>,
+    tanks: Res<Tanks>,
+    assets: Res<ProjectileVisualAssets>,
+    mut seed: ResMut<AiDecisionSeed>,
+    mut flight: ResMut<ProjectileFlight>,
+    mut latest_impact: ResMut<LatestTerrainImpact>,
+    mut weapons: ResMut<WeaponState>,
+    mut turn: ResMut<CurrentTurn>,
+    mut commands: Commands,
+) {
+    if !setup.started || current_player_is_human(&configuration.0, &turn.0) {
+        return;
+    }
+    let actor = turn.0.current_player;
+    let Some(decision) = decide_firing(&mut seed.0, actor, &tanks.0) else {
+        return;
+    };
+    if !turn.0.set_current_aim(decision.aim)
+        || !weapons.0.for_player_mut(actor).select(decision.weapon)
+    {
+        return;
+    }
+    fire_current_player(
+        &tanks.0,
+        &assets,
+        &mut flight.0,
+        &mut latest_impact,
+        &mut weapons.0,
+        &mut turn.0,
+        &mut commands,
+    );
 }
 
 fn select_weapon_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     setup: Res<MatchSetupGate>,
+    configuration: Res<PendingMatchConfiguration>,
     flight: Res<ProjectileFlight>,
     turn: Res<CurrentTurn>,
     mut weapons: ResMut<WeaponState>,
 ) {
     if !setup.started
         || flight.0.is_some()
+        || !current_player_is_human(&configuration.0, &turn.0)
         || turn.0.match_state != MatchState::InProgress
         || turn.0.phase != TurnPhase::Choosing
     {
@@ -901,24 +991,34 @@ fn select_weapon_input(
 fn select_movement_action(
     keyboard: Res<ButtonInput<KeyCode>>,
     setup: Res<MatchSetupGate>,
+    configuration: Res<PendingMatchConfiguration>,
     mut feedback: ResMut<MovementFeedback>,
     mut turn: ResMut<CurrentTurn>,
 ) {
-    if setup.started && keyboard.just_pressed(KeyCode::KeyM) && turn.0.begin_movement() {
+    if setup.started
+        && current_player_is_human(&configuration.0, &turn.0)
+        && keyboard.just_pressed(KeyCode::KeyM)
+        && turn.0.begin_movement()
+    {
         feedback.0 = None;
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_movement_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     setup: Res<MatchSetupGate>,
+    configuration: Res<PendingMatchConfiguration>,
     terrain: Res<BattlefieldState>,
     camera: Single<&BattlefieldCamera>,
     mut tanks: ResMut<Tanks>,
     mut feedback: ResMut<MovementFeedback>,
     mut turn: ResMut<CurrentTurn>,
 ) {
-    if !setup.started || turn.0.remaining_movement().is_none() {
+    if !setup.started
+        || !current_player_is_human(&configuration.0, &turn.0)
+        || turn.0.remaining_movement().is_none()
+    {
         return;
     }
     if keyboard.just_pressed(KeyCode::Enter) {
@@ -989,12 +1089,17 @@ fn nearest_cardinal_movement_direction(x: f32, z: f32) -> MovementDirection {
 fn update_aiming_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     setup: Res<MatchSetupGate>,
+    configuration: Res<PendingMatchConfiguration>,
     flight: Res<ProjectileFlight>,
     time: Res<Time>,
     mut repeat_state: ResMut<AimRepeatState>,
     mut turn: ResMut<CurrentTurn>,
 ) {
-    if !setup.started || flight.0.is_some() || turn.0.phase != TurnPhase::Choosing {
+    if !setup.started
+        || !current_player_is_human(&configuration.0, &turn.0)
+        || flight.0.is_some()
+        || turn.0.phase != TurnPhase::Choosing
+    {
         repeat_state.reset();
         return;
     }
