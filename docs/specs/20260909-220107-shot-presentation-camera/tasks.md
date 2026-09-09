@@ -17,8 +17,8 @@ description: "Actionable implementation tasks for controller-aware shot presenta
 
 **Purpose**: Confirm the exact existing extension points and retain a clean baseline before feature edits.
 
-- [ ] T001 Inspect and preserve current camera, launch, fixed-update, HUD, and resolution order in crates/azimuth-game/src/main.rs before editing
-- [ ] T002 Run the baseline focused suite and record its passing state with cargo test -p azimuth-game from the Cargo.toml workspace root
+- [x] T001 Inspect and preserve current camera, launch, fixed-update, HUD, and resolution order in crates/azimuth-game/src/main.rs before editing
+- [x] T002 Run the baseline focused suite and record its passing state with cargo test -p azimuth-game from the Cargo.toml workspace root
 
 ---
 
@@ -28,10 +28,10 @@ description: "Actionable implementation tasks for controller-aware shot presenta
 
 **CRITICAL**: Complete this phase before any user-story implementation.
 
-- [ ] T003 Add a small presentation-only ShotPresentation state, controller-aware mode selector, transition helpers, and central camera tuning constants in crates/azimuth-game/src/main.rs
-- [ ] T004 Add unit coverage for controller-type mode selection, display-name independence, and valid normal/shot/impact/result transition inputs in crates/azimuth-game/src/main.rs
-- [ ] T005 Capture immutable firing-player/controller presentation context at the shared successful launch boundary and initialise/reset it with the existing game resources in crates/azimuth-game/src/main.rs
-- [ ] T006 Update the existing camera intent/update boundary to derive presentation intent from ShotPresentation plus read-only flight, impact, tank, and turn state in crates/azimuth-game/src/main.rs
+- [x] T003 Add a small presentation-only ShotPresentation state, controller-aware mode selector, transition helpers, and central camera tuning constants in crates/azimuth-game/src/main.rs
+- [x] T004 Add unit coverage for controller-type mode selection, display-name independence, and valid normal/shot/impact/result transition inputs in crates/azimuth-game/src/main.rs
+- [x] T005 Capture immutable firing-player/controller presentation context at the shared successful launch boundary and initialise/reset it with the existing game resources in crates/azimuth-game/src/main.rs
+- [x] T006 Update the existing camera intent/update boundary to derive presentation intent from ShotPresentation plus read-only flight, impact, tank, and turn state in crates/azimuth-game/src/main.rs
 
 **Checkpoint**: Shared state is read-only with respect to authoritative projectile, terrain, tank, weapon, and turn resolution, and pure helpers have focused coverage.
 
@@ -45,14 +45,14 @@ description: "Actionable implementation tasks for controller-aware shot presenta
 
 ### Tests for User Story 1
 
-- [ ] T007 [US1] Add failing unit tests for Human launch selection, one-time ascent-to-descent apex widening, descent emphasis, immediate-impact handling, and near-vertical velocity fallback in crates/azimuth-game/src/main.rs
-- [ ] T008 [US1] Extend camera pose safety tests for Human follow target clamp, distance range, pitch range, zero roll, and smoothing behavior in crates/azimuth-game/src/main.rs
+- [x] T007 [US1] Add failing unit tests for Human launch selection, one-time ascent-to-descent apex widening, descent emphasis, immediate-impact handling, and near-vertical velocity fallback in crates/azimuth-game/src/main.rs
+- [x] T008 [US1] Extend camera pose safety tests for Human follow target clamp, distance range, pitch range, zero roll, and smoothing behavior in crates/azimuth-game/src/main.rs
 
 ### Implementation for User Story 1
 
-- [ ] T009 [US1] Implement HumanShotFollow pose derivation using live projectile position/velocity, comfortable trailing/height offsets, look-ahead, and launch-direction fallback in crates/azimuth-game/src/main.rs
-- [ ] T010 [US1] Implement observed vertical-velocity apex transition and centralised Human follow/apex/descent zoom tuning in crates/azimuth-game/src/main.rs
-- [ ] T011 [US1] Recompute active Human shot pose each rendered frame through existing interpolation while retaining manual camera input behavior only where it cannot fight automatic shot presentation in crates/azimuth-game/src/main.rs
+- [x] T009 [US1] Implement HumanShotFollow pose derivation using live projectile position/velocity, comfortable trailing/height offsets, look-ahead, and launch-direction fallback in crates/azimuth-game/src/main.rs
+- [x] T010 [US1] Implement observed vertical-velocity apex transition and centralised Human follow/apex/descent zoom tuning in crates/azimuth-game/src/main.rs
+- [x] T011 [US1] Recompute active Human shot pose each rendered frame through existing interpolation while retaining manual camera input behavior only where it cannot fight automatic shot presentation in crates/azimuth-game/src/main.rs
 
 **Checkpoint**: Human-only shot presentation is independently testable and visually demonstrates learning-oriented follow coverage without modifying projectile simulation.
 
@@ -66,13 +66,13 @@ description: "Actionable implementation tasks for controller-aware shot presenta
 
 ### Tests for User Story 2
 
-- [ ] T012 [US2] Add failing unit tests for AI tactical selection from captured controller type, all-AI composition fallback, and Human-name/controller independence in crates/azimuth-game/src/main.rs
-- [ ] T013 [US2] Add pose-decision tests proving AI tactical framing remains broader than Human early-flight framing and does not require an existing Human tank in crates/azimuth-game/src/main.rs
+- [x] T012 [US2] Add failing unit tests for AI tactical selection from captured controller type, all-AI composition fallback, and Human-name/controller independence in crates/azimuth-game/src/main.rs
+- [x] T013 [US2] Add pose-decision tests proving AI tactical framing remains broader than Human early-flight framing and does not require an existing Human tank in crates/azimuth-game/src/main.rs
 
 ### Implementation for User Story 2
 
-- [ ] T014 [US2] Implement AiTacticalShot pose derivation from shooter, projectile direction, living tanks, and terrain-aware bounded fallback without consulting AI target calculations in crates/azimuth-game/src/main.rs
-- [ ] T015 [US2] Apply centralised tactical breadth and efficient-transition tuning while preserving existing active-AI turn establishment and HUD behavior in crates/azimuth-game/src/main.rs
+- [x] T014 [US2] Implement AiTacticalShot pose derivation from shooter, projectile direction, living tanks, and terrain-aware bounded fallback without consulting AI target calculations in crates/azimuth-game/src/main.rs
+- [x] T015 [US2] Apply centralised tactical breadth and efficient-transition tuning while preserving existing active-AI turn establishment and HUD behavior in crates/azimuth-game/src/main.rs
 
 **Checkpoint**: AI flight presentation is independently controller-selected, broad, safe in all-AI matches, and distinct from Human follow coverage.
 
@@ -86,14 +86,14 @@ description: "Actionable implementation tasks for controller-aware shot presenta
 
 ### Tests for User Story 3
 
-- [ ] T016 [US3] Add failing unit tests for Human/AI convergence to ImpactView, terrain-miss fallback, crater/nearby-tank composition inputs, and impact-hold timing in crates/azimuth-game/src/main.rs
-- [ ] T017 [US3] Add failing unit tests that winner/draw retains result framing, continuing matches select the next survivor only after impact hold, and no next-player presentation is selected for final shots in crates/azimuth-game/src/main.rs
+- [x] T016 [US3] Add failing unit tests for Human/AI convergence to ImpactView, terrain-miss fallback, crater/nearby-tank composition inputs, and impact-hold timing in crates/azimuth-game/src/main.rs
+- [x] T017 [US3] Add failing unit tests that winner/draw retains result framing, continuing matches select the next survivor only after impact hold, and no next-player presentation is selected for final shots in crates/azimuth-game/src/main.rs
 
 ### Implementation for User Story 3
 
-- [ ] T018 [US3] Capture read-only terrain-impact aftermath into ImpactContext and implement common ImpactView pose derivation using impact, crater scale, nearby living/settling tanks, and existing camera safety clamps in crates/azimuth-game/src/main.rs
-- [ ] T019 [US3] Implement a presentation-only aftermath hold that permits existing authoritative impact, terrain, damage, settling, handoff, and result logic to complete while preventing only a subsequent Human action or autonomous AI launch in crates/azimuth-game/src/main.rs
-- [ ] T020 [US3] Implement post-hold next-player/result intent selection, including out-of-bounds fallback and preservation of existing scoreboard/winner/draw HUD behavior in crates/azimuth-game/src/main.rs
+- [x] T018 [US3] Capture read-only terrain-impact aftermath into ImpactContext and implement common ImpactView pose derivation using impact, crater scale, nearby living/settling tanks, and existing camera safety clamps in crates/azimuth-game/src/main.rs
+- [x] T019 [US3] Implement a presentation-only aftermath hold that permits existing authoritative impact, terrain, damage, settling, handoff, and result logic to complete while preventing only a subsequent Human action or autonomous AI launch in crates/azimuth-game/src/main.rs
+- [x] T020 [US3] Implement post-hold next-player/result intent selection, including out-of-bounds fallback and preservation of existing scoreboard/winner/draw HUD behavior in crates/azimuth-game/src/main.rs
 
 **Checkpoint**: Either controller produces a shared, consequence-first impact view; final shots do not show another player and consecutive AI shots do not erase the preceding aftermath.
 
@@ -107,13 +107,13 @@ description: "Actionable implementation tasks for controller-aware shot presenta
 
 ### Tests for User Story 4
 
-- [ ] T021 [US4] Add regression tests proving presentation selectors, phase progression, and pose derivation do not mutate cloned Projectile, BattlefieldTerrain, Tank, or TurnState data in crates/azimuth-game/src/main.rs
-- [ ] T022 [US4] Extend existing deterministic projectile-resolution fixtures to compare identical impact position, damage, crater/terrain, settling, survivor, and winner/draw outcomes with presentation observation active or bypassed in crates/azimuth-game/src/main.rs
+- [x] T021 [US4] Add regression tests proving presentation selectors, phase progression, and pose derivation do not mutate cloned Projectile, BattlefieldTerrain, Tank, or TurnState data in crates/azimuth-game/src/main.rs
+- [x] T022 [US4] Extend existing deterministic projectile-resolution fixtures to compare identical impact position, damage, crater/terrain, settling, survivor, and winner/draw outcomes with presentation observation active or bypassed in crates/azimuth-game/src/main.rs
 
 ### Implementation for User Story 4
 
-- [ ] T023 [US4] Audit and revise camera/launch/AI gating code so presentation writes only its own state and cannot gate fixed-step projectile, impact, terrain, settling, elimination, winner, draw, or authoritative turn completion in crates/azimuth-game/src/main.rs
-- [ ] T024 [US4] Add intent-focused comments documenting Human feedback versus AI awareness, apex widening, shared impact framing, aftermath input gate, simulation independence, and invalid-framing fallbacks in crates/azimuth-game/src/main.rs
+- [x] T023 [US4] Audit and revise camera/launch/AI gating code so presentation writes only its own state and cannot gate fixed-step projectile, impact, terrain, settling, elimination, winner, draw, or authoritative turn completion in crates/azimuth-game/src/main.rs
+- [x] T024 [US4] Add intent-focused comments documenting Human feedback versus AI awareness, apex widening, shared impact framing, aftermath input gate, simulation independence, and invalid-framing fallbacks in crates/azimuth-game/src/main.rs
 
 **Checkpoint**: The non-authority contract has direct regression coverage and code-level documentation.
 
@@ -123,10 +123,10 @@ description: "Actionable implementation tasks for controller-aware shot presenta
 
 **Purpose**: Validate the complete feature, document only demonstrated roadmap completion, and retain repository health.
 
-- [ ] T025 [P] Update current shot-presentation controls and behavior documentation after implementation in README.md
-- [ ] T026 [P] Run the automated commands and complete every manual scenario in docs/specs/20260909-220107-shot-presentation-camera/quickstart.md
-- [ ] T027 Update only satisfied projectile/impact camera checkboxes and the AI tactical-wide refinement note in docs/roadmap.md after T026 evidence
-- [ ] T028 Run cargo fmt --all -- --check, cargo test --workspace, cargo check --workspace --all-targets, and cargo clippy --workspace --all-targets --all-features -- -D warnings from Cargo.toml workspace root
+- [x] T025 [P] Update current shot-presentation controls and behavior documentation after implementation in README.md
+- [x] T026 [P] Run the automated commands and complete every manual scenario in docs/specs/20260909-220107-shot-presentation-camera/quickstart.md
+- [x] T027 Update only satisfied projectile/impact camera checkboxes and the AI tactical-wide refinement note in docs/roadmap.md after T026 evidence
+- [x] T028 Run cargo fmt --all -- --check, cargo test --workspace, cargo check --workspace --all-targets, and cargo clippy --workspace --all-targets --all-features -- -D warnings from Cargo.toml workspace root
 
 ---
 

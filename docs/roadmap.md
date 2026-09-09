@@ -621,7 +621,7 @@ Explosions should be satisfying visually and mechanically.
 * [x] Explosion visual effect.
 * [ ] Terrain debris.
 * [ ] Smoke.
-* [ ] Camera response.
+* [x] Camera response.
 * [ ] Sound.
 * [ ] Deliberately exaggerated presentation where appropriate.
 
@@ -812,31 +812,32 @@ Watching the shot is part of the game.
 
 ## Projectile Camera
 
-* [ ] Track projectile in flight.
-* [ ] Add a golf-style shot camera: follow the fired projectile from a comfortable offset through
+* [x] Track projectile in flight.
+* [x] Add a golf-style shot camera: follow the fired projectile from a comfortable offset through
   landing so players can read arc and wind drift; at its apex, smoothly widen to include all living
   players and the likely impact area, then frame the explosion and its aftermath without changing
   authoritative simulation or turn timing.
-* [ ] Maintain awareness of surrounding terrain.
+* [x] Maintain awareness of surrounding terrain.
 * [x] Pull back to a readable general battlefield view when a projectile launches.
-* [ ] Transition naturally toward impact.
+* [x] Transition naturally toward impact.
 * [x] Avoid nausea-inducing camera behaviour.
 * [ ] Allow player to skip or accelerate long trajectories eventually if necessary.
-* [ ] Preserve the drama of watching shots rather than instantly resolving them.
+* [x] Preserve the drama of watching shots rather than instantly resolving them.
 
 ## Impact Camera
 
-* [ ] Frame explosion.
-* [ ] Show affected players.
-* [ ] Show terrain deformation.
+* [x] Frame explosion.
+* [x] Show affected players.
+* [x] Show terrain deformation.
 * [x] Return clearly to the next player's perspective.
 
 ## Tactical Camera and Repeating Controls
 
-Directional aim controls, held repeat, active-player presentation, and shot pullback are complete.
+Directional aim controls, held repeat, active-player presentation, controller-aware Human follow
+and AI tactical-wide shot coverage, shared impact framing, and shot pullback are complete.
 Camera timing remains presentation-only: it does not delay firing, movement, projectile simulation,
-terrain deformation, or turn advancement. Projectile tracking, impact framing, and any future
-non-conflicting panning control remain separate work.
+terrain deformation, or turn advancement. Any future non-conflicting panning and trajectory-skip
+control remain separate work.
 
 ---
 
@@ -1144,7 +1145,7 @@ These are conceptual milestones rather than fixed specification sequences.
 * [x] Match setup exists.
 * [ ] Human-vs-human game flow is polished.
 * [ ] AI opponent exists.
-* [ ] Camera transitions support the action.
+* [x] Camera transitions support the action.
 * [ ] UI clearly communicates aiming/environment state.
 * [ ] Audio gives shots and impacts satisfying weight.
 * [ ] A full match can be started, played, won, and restarted without developer tooling.
