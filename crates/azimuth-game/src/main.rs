@@ -51,9 +51,16 @@ const CAMERA_TRANSITION_SPEED: f32 = 5.0;
 const ACTIVE_PLAYER_CAMERA_DISTANCE: f32 = 16.0;
 const ACTIVE_PLAYER_CAMERA_HEIGHT: f32 = 1.8;
 const ACTIVE_PLAYER_CAMERA_PITCH: f32 = -0.35;
-const SHOT_CAMERA_DISTANCE: f32 = 105.0;
-const SHOT_CAMERA_HEIGHT: f32 = 16.0;
 const SHOT_CAMERA_PITCH: f32 = -0.6;
+const HUMAN_SHOT_DISTANCE: f32 = 22.0;
+const HUMAN_APEX_DISTANCE: f32 = 46.0;
+const HUMAN_SHOT_HEIGHT: f32 = 5.0;
+const HUMAN_LOOK_AHEAD: f32 = 5.0;
+const AI_TACTICAL_DISTANCE: f32 = 82.0;
+const AI_TACTICAL_HEIGHT: f32 = 12.0;
+const IMPACT_CAMERA_DISTANCE: f32 = 27.0;
+const IMPACT_CAMERA_HEIGHT: f32 = 3.0;
+const IMPACT_VIEW_HOLD_SECONDS: f32 = 0.9;
 const AIM_REPEAT_DELAY_SECONDS: f32 = 0.3;
 const AIM_REPEAT_INTERVAL_SECONDS: f32 = 0.1;
 const PROJECTILE_FIXED_HZ: f64 = 120.0;
@@ -90,10 +97,56 @@ struct CameraPose {
     distance: f32,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 enum CameraPresentationIntent {
     ActivePlayer(PlayerId),
-    WatchingShot,
+    HumanShotFollow(Projectile),
+    AiTacticalShot {
+        shooter: PlayerId,
+        projectile: Projectile,
+    },
+    Impact(WorldPosition),
+    Result(WorldPosition),
+}
+
+/// Presentation records who fired once at launch, rather than guessing from input or a display
+/// name after authoritative turn resolution has already advanced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ShotPresentationMode {
+    HumanFollow,
+    AiTactical,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum ShotPresentationPhase {
+    PlayerView,
+    Flight {
+        mode: ShotPresentationMode,
+        shooter: PlayerId,
+        apex_seen: bool,
+    },
+    Impact {
+        position: WorldPosition,
+        elapsed_seconds: f32,
+    },
+    Result {
+        position: WorldPosition,
+    },
+}
+
+#[derive(Resource, Clone, Copy, Debug, PartialEq)]
+struct ShotPresentation {
+    phase: ShotPresentationPhase,
+    seen_impact: Option<TerrainImpact>,
+}
+
+impl Default for ShotPresentation {
+    fn default() -> Self {
+        Self {
+            phase: ShotPresentationPhase::PlayerView,
+            seen_impact: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -398,6 +451,7 @@ fn main() {
         .insert_resource(AiDecisionSeed(derived_seed(match_seed.0, "ai")))
         .insert_resource(WorldDressing(dressing))
         .insert_resource(ProjectileFlight::default())
+        .insert_resource(ShotPresentation::default())
         .insert_resource(WeaponState::default())
         .insert_resource(LatestTerrainImpact::default())
         .insert_resource(CurrentImpactExplosionConsumed::default())
@@ -415,6 +469,7 @@ fn main() {
             Update,
             (
                 (
+                    update_shot_presentation,
                     update_battlefield_camera,
                     update_match_setup,
                     select_weapon_input,
@@ -926,6 +981,7 @@ fn launch_aimed_projectile(
     keyboard: Res<ButtonInput<KeyCode>>,
     setup: Res<MatchSetupGate>,
     configuration: Res<PendingMatchConfiguration>,
+    presentation: Res<ShotPresentation>,
     tanks: Res<Tanks>,
     assets: Res<ProjectileVisualAssets>,
     mut flight: ResMut<ProjectileFlight>,
@@ -937,6 +993,7 @@ fn launch_aimed_projectile(
     if !setup.started
         || !keyboard.just_pressed(KeyCode::Space)
         || !current_player_is_human(&configuration.0, &turn.0)
+        || !presentation_allows_new_action(&presentation)
         || flight.0.is_some()
         || turn.0.match_state != MatchState::InProgress
         || turn.0.phase != TurnPhase::Choosing
@@ -1005,10 +1062,122 @@ fn current_player_is_human(configuration: &MatchConfiguration, turn: &TurnState)
         .is_some_and(|player| player.controller == ControllerType::Human)
 }
 
+fn shot_mode_for_player(
+    configuration: &MatchConfiguration,
+    player: PlayerId,
+) -> ShotPresentationMode {
+    match configuration
+        .players
+        .iter()
+        .find(|configured| configured.id == player)
+        .expect("active player must have match configuration")
+        .controller
+    {
+        ControllerType::Human => ShotPresentationMode::HumanFollow,
+        ControllerType::Ai => ShotPresentationMode::AiTactical,
+    }
+}
+
+fn presentation_allows_new_action(presentation: &ShotPresentation) -> bool {
+    !matches!(presentation.phase, ShotPresentationPhase::Impact { .. })
+}
+
+/// This runs before controllers each rendered frame. It observes already-authoritative resources:
+/// no camera transition can slow flight, terrain deformation, settling, or turn completion.
+fn update_shot_presentation(
+    time: Res<Time>,
+    configuration: Res<PendingMatchConfiguration>,
+    flight: Res<ProjectileFlight>,
+    latest_impact: Res<LatestTerrainImpact>,
+    tanks: Res<Tanks>,
+    turn: Res<CurrentTurn>,
+    mut presentation: ResMut<ShotPresentation>,
+) {
+    match (presentation.phase, flight.0) {
+        (ShotPresentationPhase::PlayerView, None) => {
+            if let Some(impact) = latest_impact.impact
+                && presentation.seen_impact != Some(impact)
+            {
+                presentation.seen_impact = Some(impact);
+                presentation.phase = ShotPresentationPhase::Impact {
+                    position: impact.position,
+                    elapsed_seconds: 0.0,
+                };
+            }
+        }
+        (ShotPresentationPhase::PlayerView, Some(shot)) => {
+            presentation.phase = ShotPresentationPhase::Flight {
+                mode: shot_mode_for_player(&configuration.0, turn.0.current_player),
+                shooter: turn.0.current_player,
+                apex_seen: shot.projectile.velocity.y <= 0.0,
+            };
+        }
+        (
+            ShotPresentationPhase::Flight {
+                mode,
+                shooter,
+                apex_seen,
+            },
+            Some(shot),
+        ) => {
+            presentation.phase = ShotPresentationPhase::Flight {
+                mode,
+                shooter,
+                apex_seen: apex_seen || shot.projectile.velocity.y <= 0.0,
+            };
+        }
+        (ShotPresentationPhase::Flight { .. }, None) if latest_impact.impact.is_some() => {
+            presentation.seen_impact = latest_impact.impact;
+            presentation.phase = ShotPresentationPhase::Impact {
+                position: latest_impact.impact.expect("checked impact").position,
+                elapsed_seconds: 0.0,
+            };
+        }
+        (ShotPresentationPhase::Flight { .. }, None) => {
+            presentation.phase = if turn.0.match_state == MatchState::InProgress {
+                ShotPresentationPhase::PlayerView
+            } else {
+                ShotPresentationPhase::Result {
+                    position: WorldPosition {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                }
+            };
+        }
+        (
+            ShotPresentationPhase::Impact {
+                position,
+                elapsed_seconds,
+            },
+            None,
+        ) => {
+            let elapsed_seconds = elapsed_seconds + time.delta_secs();
+            if elapsed_seconds >= IMPACT_VIEW_HOLD_SECONDS && !any_living_tank_is_settling(&tanks.0)
+            {
+                presentation.phase = if turn.0.match_state == MatchState::InProgress {
+                    ShotPresentationPhase::PlayerView
+                } else {
+                    ShotPresentationPhase::Result { position }
+                };
+            } else {
+                presentation.phase = ShotPresentationPhase::Impact {
+                    position,
+                    elapsed_seconds,
+                };
+            }
+        }
+        (ShotPresentationPhase::Result { .. }, _) => {}
+        (_, Some(_)) => {}
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn run_ai_controller(
     setup: Res<MatchSetupGate>,
     configuration: Res<PendingMatchConfiguration>,
+    presentation: Res<ShotPresentation>,
     tanks: Res<Tanks>,
     assets: Res<ProjectileVisualAssets>,
     mut seed: ResMut<AiDecisionSeed>,
@@ -1018,7 +1187,10 @@ fn run_ai_controller(
     mut turn: ResMut<CurrentTurn>,
     mut commands: Commands,
 ) {
-    if !setup.started || current_player_is_human(&configuration.0, &turn.0) {
+    if !setup.started
+        || !presentation_allows_new_action(&presentation)
+        || current_player_is_human(&configuration.0, &turn.0)
+    {
         return;
     }
     let actor = turn.0.current_player;
@@ -1045,12 +1217,14 @@ fn select_weapon_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     setup: Res<MatchSetupGate>,
     configuration: Res<PendingMatchConfiguration>,
+    presentation: Res<ShotPresentation>,
     flight: Res<ProjectileFlight>,
     turn: Res<CurrentTurn>,
     mut weapons: ResMut<WeaponState>,
 ) {
     if !setup.started
         || flight.0.is_some()
+        || !presentation_allows_new_action(&presentation)
         || !current_player_is_human(&configuration.0, &turn.0)
         || turn.0.match_state != MatchState::InProgress
         || turn.0.phase != TurnPhase::Choosing
@@ -1078,10 +1252,12 @@ fn select_movement_action(
     keyboard: Res<ButtonInput<KeyCode>>,
     setup: Res<MatchSetupGate>,
     configuration: Res<PendingMatchConfiguration>,
+    presentation: Res<ShotPresentation>,
     mut feedback: ResMut<MovementFeedback>,
     mut turn: ResMut<CurrentTurn>,
 ) {
     if setup.started
+        && presentation_allows_new_action(&presentation)
         && current_player_is_human(&configuration.0, &turn.0)
         && keyboard.just_pressed(KeyCode::KeyM)
         && turn.0.begin_movement()
@@ -1095,6 +1271,7 @@ fn update_movement_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     setup: Res<MatchSetupGate>,
     configuration: Res<PendingMatchConfiguration>,
+    presentation: Res<ShotPresentation>,
     terrain: Res<BattlefieldState>,
     camera: Single<&BattlefieldCamera>,
     mut tanks: ResMut<Tanks>,
@@ -1103,6 +1280,7 @@ fn update_movement_input(
 ) {
     if !setup.started
         || !current_player_is_human(&configuration.0, &turn.0)
+        || !presentation_allows_new_action(&presentation)
         || turn.0.remaining_movement().is_none()
     {
         return;
@@ -1172,10 +1350,12 @@ fn nearest_cardinal_movement_direction(x: f32, z: f32) -> MovementDirection {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_aiming_input(
     keyboard: Res<ButtonInput<KeyCode>>,
     setup: Res<MatchSetupGate>,
     configuration: Res<PendingMatchConfiguration>,
+    presentation: Res<ShotPresentation>,
     flight: Res<ProjectileFlight>,
     time: Res<Time>,
     mut repeat_state: ResMut<AimRepeatState>,
@@ -1184,6 +1364,7 @@ fn update_aiming_input(
     if !setup.started
         || !current_player_is_human(&configuration.0, &turn.0)
         || flight.0.is_some()
+        || !presentation_allows_new_action(&presentation)
         || turn.0.phase != TurnPhase::Choosing
     {
         repeat_state.reset();
@@ -1377,6 +1558,7 @@ fn sync_tank_elimination(tanks: Res<Tanks>, mut visuals: Query<(&TankVisual, &mu
 /// Keeps the isolated wind viewport aligned with its UI reservation and rotates its mesh from the
 /// active player's live turret aim.  Neither the camera nor its arrow participates in gameplay
 /// visibility, collision, or the battlefield render layer.
+#[allow(clippy::type_complexity)]
 fn update_wind_indicator_overlay(
     setup: Res<MatchSetupGate>,
     turn: Res<CurrentTurn>,
@@ -2253,13 +2435,28 @@ fn update_battlefield_camera(
     mouse_motion: Res<AccumulatedMouseMotion>,
     mut mouse_wheel: MessageReader<MouseWheel>,
     time: Res<Time>,
-    gameplay: (Res<Tanks>, Res<CurrentTurn>, Res<ProjectileFlight>),
+    gameplay: (
+        Res<Tanks>,
+        Res<CurrentTurn>,
+        Res<ProjectileFlight>,
+        Res<ShotPresentation>,
+    ),
     camera: Single<(&mut Transform, &mut BattlefieldCamera)>,
 ) {
-    let (tanks, turn, flight) = gameplay;
+    let (tanks, turn, flight, presentation) = gameplay;
     let (mut transform, mut controller) = camera.into_inner();
-    let intent = camera_presentation_intent(turn.0.clone(), flight.0.map(|shot| shot.projectile));
-    if controller.presentation_intent != Some(intent) {
+    let intent = camera_presentation_intent(
+        *presentation,
+        turn.0.clone(),
+        flight.0.map(|shot| shot.projectile),
+    );
+    if controller.presentation_intent != Some(intent)
+        || matches!(
+            intent,
+            CameraPresentationIntent::HumanShotFollow(_)
+                | CameraPresentationIntent::AiTacticalShot { .. }
+        )
+    {
         controller.presentation_intent = Some(intent);
         controller.desired_pose = camera_pose_for_intent(intent, tanks.0.clone(), turn.0.clone());
         controller.tracked_aim_yaw = active_aim_yaw(intent, turn.0.clone());
@@ -2270,7 +2467,9 @@ fn update_battlefield_camera(
         controller.tracked_aim_yaw = Some(aim_yaw);
     }
 
-    if mouse_buttons.pressed(MouseButton::Right) {
+    if matches!(intent, CameraPresentationIntent::ActivePlayer(_))
+        && mouse_buttons.pressed(MouseButton::Right)
+    {
         // Mouse motion already represents the full movement since the prior frame.
         controller.yaw -= mouse_motion.delta.x * CAMERA_ORBIT_SENSITIVITY;
         controller.pitch =
@@ -2280,6 +2479,9 @@ fn update_battlefield_camera(
     }
 
     for wheel in mouse_wheel.read() {
+        if !matches!(intent, CameraPresentationIntent::ActivePlayer(_)) {
+            continue;
+        }
         controller.distance = (controller.distance - wheel.y * CAMERA_ZOOM_SPEED)
             .clamp(CAMERA_MIN_DISTANCE, CAMERA_MAX_DISTANCE);
         controller.desired_pose.distance = controller.distance;
@@ -2297,14 +2499,33 @@ fn clamp_camera_pitch(pitch: f32) -> f32 {
 }
 
 fn camera_presentation_intent(
+    presentation: ShotPresentation,
     turn: impl std::borrow::Borrow<TurnState>,
     flight: Option<Projectile>,
 ) -> CameraPresentationIntent {
     let turn = turn.borrow();
-    if flight.is_some() {
-        CameraPresentationIntent::WatchingShot
-    } else {
-        CameraPresentationIntent::ActivePlayer(turn.current_player)
+    match presentation.phase {
+        ShotPresentationPhase::PlayerView => {
+            CameraPresentationIntent::ActivePlayer(turn.current_player)
+        }
+        ShotPresentationPhase::Flight {
+            mode: ShotPresentationMode::HumanFollow,
+            ..
+        } => CameraPresentationIntent::HumanShotFollow(
+            flight.expect("flight presentation needs projectile"),
+        ),
+        ShotPresentationPhase::Flight {
+            mode: ShotPresentationMode::AiTactical,
+            shooter,
+            ..
+        } => CameraPresentationIntent::AiTacticalShot {
+            shooter,
+            projectile: flight.expect("flight presentation needs projectile"),
+        },
+        ShotPresentationPhase::Impact { position, .. } => {
+            CameraPresentationIntent::Impact(position)
+        }
+        ShotPresentationPhase::Result { position } => CameraPresentationIntent::Result(position),
     }
 }
 
@@ -2313,7 +2534,7 @@ fn active_aim_yaw(intent: CameraPresentationIntent, turn: TurnState) -> Option<f
         CameraPresentationIntent::ActivePlayer(player) => {
             Some(-turn.aim_for(player).azimuth_degrees.to_radians())
         }
-        CameraPresentationIntent::WatchingShot => None,
+        _ => None,
     }
 }
 
@@ -2337,12 +2558,70 @@ fn camera_pose_for_intent(
                 distance: ACTIVE_PLAYER_CAMERA_DISTANCE,
             }
         }
-        CameraPresentationIntent::WatchingShot => CameraPose {
-            target: Vec3::Y * SHOT_CAMERA_HEIGHT,
-            yaw: 0.0,
-            pitch: SHOT_CAMERA_PITCH,
-            distance: SHOT_CAMERA_DISTANCE,
+        CameraPresentationIntent::HumanShotFollow(projectile) => human_shot_camera_pose(projectile),
+        CameraPresentationIntent::AiTacticalShot {
+            shooter,
+            projectile,
+        } => ai_tactical_camera_pose(shooter, projectile, tanks),
+        CameraPresentationIntent::Impact(position) => impact_camera_pose(position),
+        CameraPresentationIntent::Result(position) => impact_camera_pose(position),
+    }
+}
+
+fn human_shot_camera_pose(projectile: Projectile) -> CameraPose {
+    let velocity = Vec3::new(projectile.velocity.x, 0.0, projectile.velocity.z);
+    let forward = velocity.normalize_or_zero();
+    let forward = if forward.length_squared() > 0.0 {
+        forward
+    } else {
+        Vec3::NEG_Z
+    };
+    let apex = projectile.velocity.y <= 0.0;
+    CameraPose {
+        target: clamp_camera_target(
+            to_bevy_position(projectile.position)
+                + forward * HUMAN_LOOK_AHEAD
+                + Vec3::Y * HUMAN_SHOT_HEIGHT,
+        ),
+        yaw: -forward.x.atan2(-forward.z),
+        pitch: if apex { -0.52 } else { -0.38 },
+        distance: if apex {
+            HUMAN_APEX_DISTANCE
+        } else {
+            HUMAN_SHOT_DISTANCE
         },
+    }
+}
+
+fn ai_tactical_camera_pose(
+    shooter: PlayerId,
+    projectile: Projectile,
+    tanks: &[Tank],
+) -> CameraPose {
+    let shooter_position = to_bevy_position(tank_for_player(tanks, shooter).pose.position);
+    let projectile_position = to_bevy_position(projectile.position);
+    let direction = (projectile_position - shooter_position).normalize_or_zero();
+    let direction = if direction.length_squared() > 0.0 {
+        direction
+    } else {
+        Vec3::NEG_Z
+    };
+    CameraPose {
+        target: clamp_camera_target(
+            (shooter_position + projectile_position) * 0.5 + Vec3::Y * AI_TACTICAL_HEIGHT,
+        ),
+        yaw: -direction.x.atan2(-direction.z),
+        pitch: SHOT_CAMERA_PITCH,
+        distance: AI_TACTICAL_DISTANCE,
+    }
+}
+
+fn impact_camera_pose(position: WorldPosition) -> CameraPose {
+    CameraPose {
+        target: clamp_camera_target(to_bevy_position(position) + Vec3::Y * IMPACT_CAMERA_HEIGHT),
+        yaw: 0.0,
+        pitch: SHOT_CAMERA_PITCH,
+        distance: IMPACT_CAMERA_DISTANCE,
     }
 }
 
@@ -3024,7 +3303,7 @@ mod tests {
         let tanks = initial_tanks(&terrain);
         let mut turn = initial_turn_state(tanks);
         assert_eq!(
-            camera_presentation_intent(&turn, None),
+            camera_presentation_intent(ShotPresentation::default(), &turn, None),
             CameraPresentationIntent::ActivePlayer(PlayerId::One)
         );
 
@@ -3034,16 +3313,114 @@ mod tests {
             z: 0.0,
         }));
         assert_eq!(
-            camera_presentation_intent(&turn, Some(projectile)),
-            CameraPresentationIntent::WatchingShot
+            camera_presentation_intent(
+                ShotPresentation {
+                    phase: ShotPresentationPhase::Flight {
+                        mode: ShotPresentationMode::HumanFollow,
+                        shooter: PlayerId::One,
+                        apex_seen: false,
+                    },
+                    ..default()
+                },
+                &turn,
+                Some(projectile),
+            ),
+            CameraPresentationIntent::HumanShotFollow(projectile)
         );
 
         assert!(turn.begin_movement());
         assert!(turn.finish_movement([true, true]));
         assert_eq!(
-            camera_presentation_intent(turn, None),
+            camera_presentation_intent(ShotPresentation::default(), turn, None),
             CameraPresentationIntent::ActivePlayer(PlayerId::Two)
         );
+    }
+
+    #[test]
+    fn controller_type_selects_shot_presentation_not_display_name() {
+        let mut configuration = MatchConfiguration::default();
+        configuration
+            .set_name(PlayerId::One, "Crater Kate")
+            .unwrap();
+        assert_eq!(
+            shot_mode_for_player(&configuration, PlayerId::One),
+            ShotPresentationMode::HumanFollow
+        );
+        configuration.set_controller(PlayerId::One, ControllerType::Ai);
+        assert_eq!(
+            shot_mode_for_player(&configuration, PlayerId::One),
+            ShotPresentationMode::AiTactical
+        );
+    }
+
+    #[test]
+    fn human_apex_widens_without_mutating_the_projectile() {
+        let parameters = AimingState::new(0.0, 45.0, 18.0).shot_parameters(WorldPosition {
+            x: 0.0,
+            y: 5.0,
+            z: 0.0,
+        });
+        let climbing = Projectile::launch(parameters);
+        let mut descending = climbing;
+        descending.velocity.y = -0.1;
+        assert_eq!(
+            human_shot_camera_pose(climbing).distance,
+            HUMAN_SHOT_DISTANCE
+        );
+        assert_eq!(
+            human_shot_camera_pose(descending).distance,
+            HUMAN_APEX_DISTANCE
+        );
+        assert_eq!(climbing.velocity.y, parameters.launch_velocity().y);
+    }
+
+    #[test]
+    fn human_and_ai_flights_converge_on_one_impact_intent_and_final_stays_result() {
+        let terrain = BattlefieldTerrain::initial();
+        let tanks = initial_tanks(&terrain);
+        let turn = initial_turn_state(tanks);
+        let impact = WorldPosition {
+            x: 4.0,
+            y: 2.0,
+            z: -3.0,
+        };
+        let shared = ShotPresentation {
+            phase: ShotPresentationPhase::Impact {
+                position: impact,
+                elapsed_seconds: 0.0,
+            },
+            ..default()
+        };
+        assert_eq!(
+            camera_presentation_intent(shared, &turn, None),
+            CameraPresentationIntent::Impact(impact)
+        );
+        let final_presentation = ShotPresentation {
+            phase: ShotPresentationPhase::Result { position: impact },
+            ..default()
+        };
+        assert_eq!(
+            camera_presentation_intent(final_presentation, &turn, None),
+            CameraPresentationIntent::Result(impact)
+        );
+    }
+
+    #[test]
+    fn tactical_pose_is_broader_and_all_ai_safe() {
+        let terrain = BattlefieldTerrain::initial();
+        let tanks = initial_tanks(&terrain);
+        let projectile = Projectile::launch(AimingState::new(0.0, 45.0, 18.0).shot_parameters(
+            WorldPosition {
+                x: 0.0,
+                y: 5.0,
+                z: 0.0,
+            },
+        ));
+        let human = human_shot_camera_pose(projectile);
+        let ai = ai_tactical_camera_pose(PlayerId::One, projectile, &tanks);
+        assert!(ai.distance > human.distance);
+        assert!(ai.target.x.abs() <= HALF_EXTENT);
+        assert!(ai.target.z.abs() <= HALF_EXTENT);
     }
 
     #[test]

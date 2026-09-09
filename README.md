@@ -87,8 +87,13 @@ The camera presents the current turn and fired shots without owning gameplay tim
 - Player One (red) begins, then turns alternate with Player Two (blue). The corner display names
   the authoritative current player and whether they are choosing, moving, or resolving a shot.
   At each choosing turn, the camera smoothly presents that player's tank behind their barrel's
-  horizontal aim direction; firing pulls it back to a wider battlefield view. These transitions
-  never delay input, flight, impact, or handoff.
+  horizontal aim direction. A Human-fired shell receives an offset broadcast follow view that
+  widens after its observed apex; an AI-fired shell uses a wider tactical view. Both use a shared
+  impact view so crater formation and nearby tank consequences remain visible briefly before the
+  next normal turn view or final result. These are presentation-only observations: they never
+  delay projectile simulation, impact, terrain deformation, settling, damage, elimination, or
+  winner/draw resolution. A short aftermath hold prevents a subsequent player action or automatic
+  AI launch from immediately replacing the visible consequence.
   While choosing, Left/Right decrease/increase azimuth, Up/Down decrease/increase elevation, and
   `-`/`=` decrease/increase power. A press changes one fine increment immediately; holding a key
   begins repeat after 300 ms and repeats every 100 ms. Hold Shift for coarse changes. Azimuth
