@@ -18,6 +18,7 @@ use battlefield::{
     WATER_TABLE, generate_buildings, terrain_mesh_indices,
 };
 use bevy::{
+    audio::{AudioPlayer, AudioSource, PlaybackSettings, SpatialListener, Volume},
     asset::RenderAssetUsages,
     camera::{Viewport, visibility::RenderLayers},
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
@@ -63,6 +64,7 @@ const IMPACT_CAMERA_HEIGHT: f32 = 3.0;
 const IMPACT_VIEW_HOLD_SECONDS: f32 = 0.9;
 const AIM_REPEAT_DELAY_SECONDS: f32 = 0.3;
 const AIM_REPEAT_INTERVAL_SECONDS: f32 = 0.1;
+const TURRET_DINK_INTERVAL_SECONDS: f32 = 0.07;
 const PROJECTILE_FIXED_HZ: f64 = 120.0;
 const DEVELOPMENT_GRAVITY: f32 = 8.0;
 const MINIMUM_WIND_STRENGTH: f32 = 0.75;
@@ -245,6 +247,24 @@ struct ProjectileVisualAssets {
     mesh: Handle<Mesh>,
     material: Handle<StandardMaterial>,
 }
+
+#[derive(Resource)]
+struct AudioAssets {
+    fire: Handle<AudioSource>,
+    flight: Handle<AudioSource>,
+    impact: Handle<AudioSource>,
+    wind: Handle<AudioSource>,
+    turret_dink: Handle<AudioSource>,
+}
+
+#[derive(Resource, Default)]
+struct TurretDinkCooldown(f32);
+
+#[derive(Component)]
+struct FlightAudio;
+
+#[derive(Component)]
+struct WindAudio;
 
 #[derive(Resource)]
 struct ImpactMarkerAssets {
@@ -459,6 +479,7 @@ fn main() {
         .insert_resource(MatchSetupGate::default())
         .insert_resource(PendingMatchConfiguration(configuration))
         .insert_resource(AimRepeatState::default())
+        .insert_resource(TurretDinkCooldown::default())
         .insert_resource(BattlefieldGravity(
             Gravity::new(DEVELOPMENT_GRAVITY).expect("development gravity must be valid"),
         ))
@@ -507,6 +528,7 @@ fn spawn_battlefield_scene(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    asset_server: Res<AssetServer>,
     scene: BattlefieldSceneResources,
 ) {
     let (tanks, turn, terrain, dressing, match_seed, configuration) = scene;
@@ -514,6 +536,7 @@ fn spawn_battlefield_scene(
     let transform = camera_transform(&camera);
     commands.spawn((
         Camera3d::default(),
+        SpatialListener::default(),
         IsDefaultUiCamera,
         Projection::Perspective(PerspectiveProjection {
             far: 300.0,
@@ -522,6 +545,13 @@ fn spawn_battlefield_scene(
         camera,
         transform,
     ));
+    commands.insert_resource(AudioAssets {
+        fire: asset_server.load("audio/fire.ogg"),
+        flight: asset_server.load("audio/flight.ogg"),
+        impact: asset_server.load("audio/impact.ogg"),
+        wind: asset_server.load("audio/wind.ogg"),
+        turret_dink: asset_server.load("audio/turret-dink.ogg"),
+    });
     spawn_wind_indicator_overlay(&mut commands, &mut meshes, &mut materials);
 
     commands.spawn((
@@ -984,6 +1014,7 @@ fn launch_aimed_projectile(
     presentation: Res<ShotPresentation>,
     tanks: Res<Tanks>,
     assets: Res<ProjectileVisualAssets>,
+    audio: Res<AudioAssets>,
     mut flight: ResMut<ProjectileFlight>,
     mut latest_impact: ResMut<LatestTerrainImpact>,
     mut weapons: ResMut<WeaponState>,
@@ -1004,6 +1035,7 @@ fn launch_aimed_projectile(
     fire_current_player(
         &tanks.0,
         &assets,
+        &audio,
         &mut flight.0,
         &mut latest_impact,
         &mut weapons.0,
@@ -1016,6 +1048,7 @@ fn launch_aimed_projectile(
 fn fire_current_player(
     tanks: &[Tank],
     assets: &ProjectileVisualAssets,
+    audio: &AudioAssets,
     flight: &mut Option<FiredShot>,
     latest_impact: &mut LatestTerrainImpact,
     weapons: &mut PlayerWeaponLoadouts,
@@ -1047,6 +1080,16 @@ fn fire_current_player(
         Mesh3d(assets.mesh.clone()),
         MeshMaterial3d(assets.material.clone()),
         Transform::from_translation(to_bevy_position(shot.projectile.position)),
+    ));
+    // Successful shared launch is the sole physical fire boundary for Human and AI turns.
+    commands.spawn((
+        Name::new("Weapon fire audio"),
+        AudioPlayer(audio.fire.clone()),
+        // Keep the first audible report non-spatial until the listener mix is verified. The
+        // request still originates at the authoritative tank/weapon boundary; playback never
+        // participates in firing or simulation.
+        PlaybackSettings { volume: Volume::Linear(if definition.id == WeaponId::HeavyShell { 1.25 } else { 1.05 }), spatial: false, ..PlaybackSettings::DESPAWN },
+        Transform::from_translation(to_bevy_position(parameters.launch_position)),
     ));
     *flight = Some(shot);
     latest_impact.impact = None;
@@ -1180,6 +1223,7 @@ fn run_ai_controller(
     presentation: Res<ShotPresentation>,
     tanks: Res<Tanks>,
     assets: Res<ProjectileVisualAssets>,
+    audio: Res<AudioAssets>,
     mut seed: ResMut<AiDecisionSeed>,
     mut flight: ResMut<ProjectileFlight>,
     mut latest_impact: ResMut<LatestTerrainImpact>,
@@ -1205,6 +1249,7 @@ fn run_ai_controller(
     fire_current_player(
         &tanks.0,
         &assets,
+        &audio,
         &mut flight.0,
         &mut latest_impact,
         &mut weapons.0,
@@ -1359,7 +1404,10 @@ fn update_aiming_input(
     flight: Res<ProjectileFlight>,
     time: Res<Time>,
     mut repeat_state: ResMut<AimRepeatState>,
+    audio: Res<AudioAssets>,
+    mut dink_cooldown: ResMut<TurretDinkCooldown>,
     mut turn: ResMut<CurrentTurn>,
+    mut commands: Commands,
 ) {
     if !setup.started
         || !current_player_is_human(&configuration.0, &turn.0)
@@ -1371,10 +1419,18 @@ fn update_aiming_input(
         return;
     }
 
+    dink_cooldown.0 = (dink_cooldown.0 - time.delta_secs()).max(0.0);
     let coarse = keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight);
     for (adjustment, count) in aiming_adjustments(&keyboard, time.delta_secs(), &mut repeat_state) {
         for _ in 0..count {
+            let before = turn.0.current_aim();
             turn.0.apply_current_aim(adjustment, coarse);
+            let after = turn.0.current_aim();
+            let rotates_turret = matches!(adjustment, AimAdjustment::AzimuthDecrease | AimAdjustment::AzimuthIncrease | AimAdjustment::ElevationIncrease | AimAdjustment::ElevationDecrease);
+            if rotates_turret && before != after && dink_cooldown.0 == 0.0 {
+                commands.spawn((Name::new("Turret adjustment audio"), AudioPlayer(audio.turret_dink.clone()), PlaybackSettings { volume: Volume::Linear(0.38), spatial: false, ..PlaybackSettings::DESPAWN }));
+                dink_cooldown.0 = TURRET_DINK_INTERVAL_SECONDS;
+            }
         }
     }
 }
@@ -2286,6 +2342,7 @@ fn sync_impact_marker(
 fn sync_terrain_impact_explosion(
     latest_impact: Res<LatestTerrainImpact>,
     assets: Res<ExplosionVisualAssets>,
+    audio: Res<AudioAssets>,
     mut consumed: ResMut<CurrentImpactExplosionConsumed>,
     mut commands: Commands,
 ) {
@@ -2307,6 +2364,18 @@ fn sync_terrain_impact_explosion(
         Mesh3d(assets.mesh.clone()),
         MeshMaterial3d(assets.material.clone()),
         explosion_transform(impact.position),
+    ));
+    // The persistent authoritative impact is consumed once for both visual and audio
+    // presentation. Neither presentation path decides damage, crater shape, or turn handoff.
+    commands.spawn((
+        Name::new("Terrain impact audio"),
+        AudioPlayer(audio.impact.clone()),
+        PlaybackSettings {
+            volume: Volume::Linear(1.15 * latest_impact.explosion_visual_scale),
+            spatial: false,
+            ..PlaybackSettings::DESPAWN
+        },
+        Transform::from_translation(to_bevy_position(impact.position)),
     ));
     consumed.0 = true;
 }

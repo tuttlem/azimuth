@@ -900,9 +900,9 @@ remaining HUD usability work complete.
 
 Audio should make shots and impacts satisfying.
 
-* [ ] Weapon firing sound.
+* [x] Weapon firing sound.
 * [ ] Projectile flight sound.
-* [ ] Explosion sound.
+* [x] Explosion sound.
 * [ ] Terrain/debris sound.
 * [ ] Tank destruction sound.
 * [ ] UI sounds.
@@ -915,6 +915,11 @@ Potential stylistic direction:
 * [ ] Slightly exaggerated arcade-like effects.
 * [ ] Distinctive audio identity for unusual weapons.
 * [ ] Dramatic silence / anticipation during long projectile arcs where effective.
+
+Implementation note (2026-09-10): Basic, High Explosive, and Heavy Shell launches now use the
+shared successful-fire boundary for an audible report, and resolved terrain impacts produce one
+scaled explosion cue. Azimuth/elevation adjustments also have restrained mechanical feedback.
+Projectile flight, wind ambience, destruction, UI, and terrain/debris audio remain open.
 
 ---
 
