@@ -623,7 +623,12 @@ Explosions should be satisfying visually and mechanically.
 * [ ] Smoke.
 * [x] Camera response.
 * [ ] Sound.
-* [ ] Deliberately exaggerated presentation where appropriate.
+* [x] Deliberately exaggerated presentation where appropriate.
+
+Implementation note (2026-09-10): resolved terrain impacts now produce one short, profile-scaled
+screen pulse. A hit that damages any tank uses red as an immediate confirmation; terrain-only
+impacts remain white. The pulse is presentation-only and does not repeat for splash damage or
+elimination consequences.
 
 ---
 

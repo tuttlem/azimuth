@@ -18,8 +18,8 @@ use battlefield::{
     WATER_TABLE, generate_buildings, terrain_mesh_indices,
 };
 use bevy::{
-    audio::{AudioPlayer, AudioSource, PlaybackSettings, SpatialListener, Volume},
     asset::RenderAssetUsages,
+    audio::{AudioPlayer, AudioSource, PlaybackSettings, SpatialListener, Volume},
     camera::{Viewport, visibility::RenderLayers},
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
     mesh::Indices,
@@ -79,6 +79,8 @@ const WIND_ENABLED: bool = true;
 const EXPLOSION_VISUAL_DURATION_SECONDS: f32 = 0.6;
 const EXPLOSION_INITIAL_SCALE: f32 = 0.35;
 const EXPLOSION_MAXIMUM_SCALE: f32 = 5.0;
+const IMPACT_FLASH_BASE_DURATION_SECONDS: f32 = 0.22;
+const IMPACT_FLASH_BASE_OPACITY: f32 = 0.52;
 
 #[derive(Component)]
 struct BattlefieldCamera {
@@ -199,6 +201,7 @@ struct WeaponState(PlayerWeaponLoadouts);
 struct LatestTerrainImpact {
     impact: Option<TerrainImpact>,
     explosion_visual_scale: f32,
+    hit_tank: bool,
 }
 
 impl Default for LatestTerrainImpact {
@@ -206,6 +209,7 @@ impl Default for LatestTerrainImpact {
         Self {
             impact: None,
             explosion_visual_scale: 1.0,
+            hit_tank: false,
         }
     }
 }
@@ -214,6 +218,9 @@ impl Default for LatestTerrainImpact {
 /// The impact remains available for the diagnostic marker until the next shot clears it.
 #[derive(Resource, Default)]
 struct CurrentImpactExplosionConsumed(bool);
+
+#[derive(Resource, Default)]
+struct ImpactFlash(Option<(f32, f32, bool)>);
 
 #[derive(Resource)]
 struct BattlefieldGravity(Gravity);
@@ -324,6 +331,9 @@ struct TankMuzzle(PlayerId);
 
 #[derive(Component)]
 struct TacticalHud;
+
+#[derive(Component)]
+struct ImpactFlashOverlay;
 
 #[derive(Component)]
 struct HudText(HudTextField);
@@ -475,6 +485,7 @@ fn main() {
         .insert_resource(WeaponState::default())
         .insert_resource(LatestTerrainImpact::default())
         .insert_resource(CurrentImpactExplosionConsumed::default())
+        .insert_resource(ImpactFlash::default())
         .insert_resource(MovementFeedback::default())
         .insert_resource(MatchSetupGate::default())
         .insert_resource(PendingMatchConfiguration(configuration))
@@ -510,6 +521,7 @@ fn main() {
                     sync_projectile_visual,
                     sync_impact_marker,
                     sync_terrain_impact_explosion,
+                    update_impact_flash,
                     update_explosion_visuals,
                     sync_battlefield_mesh,
                 )
@@ -1088,12 +1100,21 @@ fn fire_current_player(
         // Keep the first audible report non-spatial until the listener mix is verified. The
         // request still originates at the authoritative tank/weapon boundary; playback never
         // participates in firing or simulation.
-        PlaybackSettings { volume: Volume::Linear(if definition.id == WeaponId::HeavyShell { 1.25 } else { 1.05 }), spatial: false, ..PlaybackSettings::DESPAWN },
+        PlaybackSettings {
+            volume: Volume::Linear(if definition.id == WeaponId::HeavyShell {
+                1.25
+            } else {
+                1.05
+            }),
+            spatial: false,
+            ..PlaybackSettings::DESPAWN
+        },
         Transform::from_translation(to_bevy_position(parameters.launch_position)),
     ));
     *flight = Some(shot);
     latest_impact.impact = None;
     latest_impact.explosion_visual_scale = 1.0;
+    latest_impact.hit_tank = false;
     true
 }
 
@@ -1426,9 +1447,23 @@ fn update_aiming_input(
             let before = turn.0.current_aim();
             turn.0.apply_current_aim(adjustment, coarse);
             let after = turn.0.current_aim();
-            let rotates_turret = matches!(adjustment, AimAdjustment::AzimuthDecrease | AimAdjustment::AzimuthIncrease | AimAdjustment::ElevationIncrease | AimAdjustment::ElevationDecrease);
+            let rotates_turret = matches!(
+                adjustment,
+                AimAdjustment::AzimuthDecrease
+                    | AimAdjustment::AzimuthIncrease
+                    | AimAdjustment::ElevationIncrease
+                    | AimAdjustment::ElevationDecrease
+            );
             if rotates_turret && before != after && dink_cooldown.0 == 0.0 {
-                commands.spawn((Name::new("Turret adjustment audio"), AudioPlayer(audio.turret_dink.clone()), PlaybackSettings { volume: Volume::Linear(0.38), spatial: false, ..PlaybackSettings::DESPAWN }));
+                commands.spawn((
+                    Name::new("Turret adjustment audio"),
+                    AudioPlayer(audio.turret_dink.clone()),
+                    PlaybackSettings {
+                        volume: Volume::Linear(0.38),
+                        spatial: false,
+                        ..PlaybackSettings::DESPAWN
+                    },
+                ));
                 dink_cooldown.0 = TURRET_DINK_INTERVAL_SECONDS;
             }
         }
@@ -1673,6 +1708,18 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
             Pickable::IGNORE,
         ))
         .with_children(|root| {
+            root.spawn((
+                ImpactFlashOverlay,
+                Node {
+                    width: percent(100),
+                    height: percent(100),
+                    position_type: PositionType::Absolute,
+                    ..default()
+                },
+                GlobalZIndex(100),
+                BackgroundColor(Color::srgba(1.0, 1.0, 1.0, 0.0)),
+                Pickable::IGNORE,
+            ));
             root.spawn((
                 BackgroundColor(Color::srgba(0.03, 0.05, 0.08, 0.82)),
                 BorderColor::all(Color::srgb(0.85, 0.25, 0.18)),
@@ -2218,10 +2265,15 @@ fn resolve_projectile_advance(
     match advance {
         ProjectileAdvance::Active => Some(shot),
         ProjectileAdvance::TerrainImpact(impact) => {
+            let health_before = tanks.iter().map(|tank| tank.health).collect::<Vec<_>>();
             resolve_explosion(tanks, impact.position, shot.impact);
             terrain.apply_crater(impact.position, shot.impact.crater);
             latest_impact.impact = Some(impact);
             latest_impact.explosion_visual_scale = shot.impact.explosion_visual_scale;
+            latest_impact.hit_tank = tanks
+                .iter()
+                .zip(health_before)
+                .any(|(tank, health)| tank.health < health);
             reconcile_living_tank_support(tanks, terrain);
             complete_resolution_if_settled(tanks, turn);
             None
@@ -2344,6 +2396,7 @@ fn sync_terrain_impact_explosion(
     assets: Res<ExplosionVisualAssets>,
     audio: Res<AudioAssets>,
     mut consumed: ResMut<CurrentImpactExplosionConsumed>,
+    mut flash: ResMut<ImpactFlash>,
     mut commands: Commands,
 ) {
     let Some(impact) = latest_impact.impact else {
@@ -2377,7 +2430,40 @@ fn sync_terrain_impact_explosion(
         },
         Transform::from_translation(to_bevy_position(impact.position)),
     ));
+    flash.0 = Some((
+        0.0,
+        latest_impact.explosion_visual_scale,
+        latest_impact.hit_tank,
+    ));
     consumed.0 = true;
+}
+
+/// A single impact-owned UI pulse reinforces force without owning any impact consequence.
+fn update_impact_flash(
+    time: Res<Time>,
+    mut flash: ResMut<ImpactFlash>,
+    mut overlays: Query<&mut BackgroundColor, With<ImpactFlashOverlay>>,
+) {
+    let (opacity, hit_tank) = if let Some((elapsed, scale, hit_tank)) = &mut flash.0 {
+        *elapsed += time.delta_secs();
+        let duration = IMPACT_FLASH_BASE_DURATION_SECONDS * scale.clamp(1.0, 1.5);
+        let progress = (*elapsed / duration).clamp(0.0, 1.0);
+        if progress >= 1.0 {
+            flash.0 = None;
+            (0.0, false)
+        } else {
+            (
+                IMPACT_FLASH_BASE_OPACITY * scale.clamp(1.0, 1.5) * (1.0 - progress),
+                *hit_tank,
+            )
+        }
+    } else {
+        (0.0, false)
+    };
+    for mut color in &mut overlays {
+        let (red, green_blue) = if hit_tank { (1.0, 0.12) } else { (1.0, 1.0) };
+        *color = BackgroundColor(Color::srgba(red, green_blue, green_blue, opacity));
+    }
 }
 
 fn update_explosion_visuals(
