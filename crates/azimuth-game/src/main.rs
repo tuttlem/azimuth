@@ -236,6 +236,11 @@ struct BattlefieldWind(Wind);
 #[derive(Resource, Default)]
 struct MovementFeedback(Option<MovementRejection>);
 
+/// Keyboard turret adjustments deliberately end free camera exploration. This presentation-only
+/// latch restores the behind-the-tank aiming view on the next camera update.
+#[derive(Resource, Default)]
+struct CameraAimReset(bool);
+
 /// The existing tactical scene is prepared behind setup so the start boundary is explicit:
 /// configuration is chosen before any human action can mutate authoritative match state.
 #[derive(Resource, Default)]
@@ -359,6 +364,14 @@ struct WindIndicatorArrow;
 #[derive(Component)]
 struct HudActivePlayerPanel;
 
+/// A presentation button maps to one stable gameplay weapon identity. It never owns ammunition
+/// or selection state; the HUD merely projects the current player's loadout into clickable slots.
+#[derive(Component)]
+struct WeaponSlot(WeaponId);
+
+#[derive(Component)]
+struct WeaponSlotAmmo(WeaponId);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum HudTextField {
     Match,
@@ -420,7 +433,11 @@ type HudDecorations<'w, 's> = Query<
         Option<&'static mut BorderColor>,
         Option<&'static HudActivePlayerPanel>,
     ),
-    (Without<HudHealthFill>, Without<HudScoreboardRow>),
+    (
+        Without<HudHealthFill>,
+        Without<HudScoreboardRow>,
+        Without<WeaponSlot>,
+    ),
 >;
 type TankMuzzleTransforms<'w, 's> = Query<
     'w,
@@ -490,6 +507,7 @@ fn main() {
         .insert_resource(CurrentImpactExplosionConsumed::default())
         .insert_resource(ImpactFlash::default())
         .insert_resource(MovementFeedback::default())
+        .insert_resource(CameraAimReset::default())
         .insert_resource(MatchSetupGate::default())
         .insert_resource(PendingMatchConfiguration(configuration))
         .insert_resource(AimRepeatState::default())
@@ -508,6 +526,7 @@ fn main() {
                     update_battlefield_camera,
                     update_match_setup,
                     select_weapon_input,
+                    select_weapon_slot,
                     select_movement_action,
                     update_aiming_input,
                     update_movement_input,
@@ -817,7 +836,7 @@ fn setup_text(parent: &mut ChildSpawnerCommands, value: &str, font_size: f32, co
     ));
 }
 
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn update_match_setup(
     keyboard: Res<ButtonInput<KeyCode>>,
     mut gate: ResMut<MatchSetupGate>,
@@ -1358,6 +1377,37 @@ fn select_weapon_input(
     }
 }
 
+/// The bottom weapon strip is a presentation affordance over the same authoritative selection
+/// boundary as number keys. A slot cannot consume ammunition and is ignored outside a human
+/// choosing turn.
+fn select_weapon_slot(
+    setup: Res<MatchSetupGate>,
+    configuration: Res<PendingMatchConfiguration>,
+    presentation: Res<ShotPresentation>,
+    flight: Res<ProjectileFlight>,
+    turn: Res<CurrentTurn>,
+    mut weapons: ResMut<WeaponState>,
+    slots: Query<(&Interaction, &WeaponSlot), Changed<Interaction>>,
+) {
+    if !setup.started
+        || flight.0.is_some()
+        || !presentation_allows_new_action(&presentation)
+        || !current_player_is_human(&configuration.0, &turn.0)
+        || turn.0.match_state != MatchState::InProgress
+        || turn.0.phase != TurnPhase::Choosing
+    {
+        return;
+    }
+    for (interaction, slot) in &slots {
+        if *interaction == Interaction::Pressed {
+            weapons
+                .0
+                .for_player_mut(turn.0.current_player)
+                .select(slot.0);
+        }
+    }
+}
+
 fn select_movement_action(
     keyboard: Res<ButtonInput<KeyCode>>,
     setup: Res<MatchSetupGate>,
@@ -1471,6 +1521,7 @@ fn update_aiming_input(
     mut repeat_state: ResMut<AimRepeatState>,
     audio: Res<AudioAssets>,
     mut dink_cooldown: ResMut<TurretDinkCooldown>,
+    mut camera_reset: ResMut<CameraAimReset>,
     mut turn: ResMut<CurrentTurn>,
     mut commands: Commands,
 ) {
@@ -1509,6 +1560,9 @@ fn update_aiming_input(
                     },
                 ));
                 dink_cooldown.0 = TURRET_DINK_INTERVAL_SECONDS;
+            }
+            if rotates_turret && before != after {
+                camera_reset.0 = true;
             }
         }
     }
@@ -1850,7 +1904,95 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
                 hud_text(p, HudTextField::Movement, 17.0);
                 hud_text(p, HudTextField::Controls, 14.0);
             });
+            root.spawn((Node {
+                position_type: PositionType::Absolute,
+                bottom: px(18),
+                left: percent(50),
+                width: px(512),
+                height: px(62),
+                margin: UiRect::left(px(-256)),
+                column_gap: px(6),
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },))
+                .with_children(|bar| {
+                    for weapon in weapon_strip_order() {
+                        bar.spawn((
+                            Button,
+                            WeaponSlot(weapon),
+                            Visibility::Hidden,
+                            BackgroundColor(Color::srgba(0.07, 0.10, 0.14, 0.94)),
+                            BorderColor::all(Color::srgb(0.34, 0.40, 0.48)),
+                            Node {
+                                width: px(58),
+                                height: px(58),
+                                border: UiRect::all(px(2)),
+                                justify_content: JustifyContent::Center,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                        ))
+                        .with_children(|slot| {
+                            slot.spawn((
+                                Text::new(weapon_strip_label(weapon)),
+                                TextFont {
+                                    font_size: 11.0,
+                                    ..default()
+                                },
+                                TextColor(Color::srgb(0.95, 0.90, 0.72)),
+                                Node {
+                                    width: px(45),
+                                    ..default()
+                                },
+                            ));
+                            slot.spawn((
+                                WeaponSlotAmmo(weapon),
+                                Text::default(),
+                                TextFont {
+                                    font_size: 15.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                                Node {
+                                    position_type: PositionType::Absolute,
+                                    top: px(2),
+                                    right: px(5),
+                                    ..default()
+                                },
+                            ));
+                        });
+                    }
+                });
         });
+}
+
+fn weapon_strip_order() -> [WeaponId; 8] {
+    [
+        WeaponId::BasicShell,
+        WeaponId::HighExplosive,
+        WeaponId::HeavyShell,
+        WeaponId::Mirv,
+        WeaponId::ClusterBomb,
+        WeaponId::BombNet,
+        WeaponId::Roller,
+        WeaponId::BunkerBuster,
+    ]
+}
+
+fn weapon_strip_label(weapon: WeaponId) -> &'static str {
+    match weapon {
+        WeaponId::BasicShell => "BASIC",
+        WeaponId::HighExplosive => "HE",
+        WeaponId::HeavyShell => "HEAVY",
+        WeaponId::Mirv => "MIRV",
+        WeaponId::ClusterBomb => "CLSTR",
+        WeaponId::BombNet => "NET",
+        WeaponId::Roller => "ROLL",
+        WeaponId::BunkerBuster => "BUNK",
+        #[cfg(test)]
+        WeaponId::TestConventional => "TEST",
+    }
 }
 
 fn hud_text(parent: &mut ChildSpawnerCommands, field: HudTextField, size: f32) {
@@ -1981,7 +2123,7 @@ fn scoreboard_entries(
 
 /// Presentation observes state only; no HUD path mutates gameplay or gates fixed simulation.
 // The grouped reads are intentionally explicit so every HUD source remains visibly read-only.
-#[allow(clippy::too_many_arguments)]
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn sync_tactical_hud(
     setup: Res<MatchSetupGate>,
     turn: Res<CurrentTurn>,
@@ -1990,12 +2132,28 @@ fn sync_tactical_hud(
     wind: Res<BattlefieldWind>,
     feedback: Res<MovementFeedback>,
     configuration: Res<PendingMatchConfiguration>,
-    mut text: Query<(&HudText, &mut Text), Without<HudScoreboardText>>,
-    mut scoreboard_text: Query<(&HudScoreboardText, &mut Text), Without<HudText>>,
-    mut fills: Query<(&HudHealthFill, &mut Node)>,
-    mut rows: Query<(&HudScoreboardRow, &mut BorderColor, &mut BackgroundColor)>,
+    mut text: Query<(&HudText, &mut Text), (Without<HudScoreboardText>, Without<WeaponSlotAmmo>)>,
+    mut scoreboard_text: Query<
+        (&HudScoreboardText, &mut Text),
+        (Without<HudText>, Without<WeaponSlotAmmo>),
+    >,
+    mut fills: Query<(&HudHealthFill, &mut Node), Without<WeaponSlot>>,
+    mut rows: Query<
+        (&HudScoreboardRow, &mut BorderColor, &mut BackgroundColor),
+        Without<WeaponSlot>,
+    >,
+    mut weapon_slots: Query<(
+        &WeaponSlot,
+        &mut Visibility,
+        &mut BackgroundColor,
+        &mut BorderColor,
+    )>,
+    mut weapon_ammunition: Query<
+        (&WeaponSlotAmmo, &mut Text),
+        (Without<HudText>, Without<HudScoreboardText>),
+    >,
     mut decorations: HudDecorations,
-    mut huds: Query<&mut Visibility, With<TacticalHud>>,
+    mut huds: Query<&mut Visibility, (With<TacticalHud>, Without<WeaponSlot>)>,
 ) {
     let view = tactical_hud_view(
         turn.0.clone(),
@@ -2050,6 +2208,39 @@ fn sync_tactical_hud(
         } else {
             Color::srgba(0.08, 0.11, 0.15, 0.92)
         };
+    }
+    let selectable =
+        setup.started && view.action == HudAction::Choose && view.active_player.is_some();
+    if let Some(player) = view.active_player {
+        let loadout = weapons.0.for_player(player);
+        for (slot, mut visibility, mut background, mut border) in &mut weapon_slots {
+            let availability = loadout.availability(slot.0);
+            *visibility = if selectable && availability.is_available() {
+                Visibility::Visible
+            } else {
+                Visibility::Hidden
+            };
+            let selected = slot.0 == loadout.selected();
+            border.top = if selected {
+                Color::srgb(1.0, 0.72, 0.18)
+            } else {
+                Color::srgb(0.34, 0.40, 0.48)
+            };
+            border.right = border.top;
+            border.bottom = border.top;
+            border.left = border.top;
+            background.0 = if selected {
+                Color::srgba(0.25, 0.19, 0.06, 0.96)
+            } else {
+                Color::srgba(0.07, 0.10, 0.14, 0.94)
+            };
+        }
+        for (ammo, mut text) in &mut weapon_ammunition {
+            text.0 = match loadout.availability(ammo.0) {
+                WeaponAvailability::Unlimited => "∞".into(),
+                WeaponAvailability::Remaining(rounds) => rounds.to_string(),
+            };
+        }
     }
     let active_colour = view
         .active_player
@@ -2182,7 +2373,7 @@ fn hud_field_text(field: HudTextField, view: &TacticalHudView) -> String {
         }),
         HudTextField::Controls => match view.action {
             HudAction::Choose => {
-                "1 BASIC | 2 HE | 3 HEAVY | 4 MIRV | 5 CLUSTER | 6 NET | 7 ROLLER | 8 BUNKER\nM MOVE | SPACE FIRE | ARROWS AIM | -/= POWER".into()
+                "CLICK WEAPON BAR | 1–8 WEAPONS | M MOVE | SPACE FIRE\nLEFT-DRAG CAMERA | SCROLL ZOOM | ARROWS AIM | -/= POWER".into()
             }
             HudAction::Moving => "ARROWS MOVE (CAMERA) | ENTER END".into(),
             HudAction::Resolving | HudAction::Finished => String::new(),
@@ -2878,6 +3069,7 @@ fn direction_transform(direction: HorizontalDirection) -> Transform {
     Transform::IDENTITY.looking_to(Vec3::new(direction.x, 0.0, direction.z), Vec3::Y)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn update_battlefield_camera(
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     mouse_motion: Res<AccumulatedMouseMotion>,
@@ -2889,6 +3081,8 @@ fn update_battlefield_camera(
         Res<ProjectileFlight>,
         Res<ShotPresentation>,
     ),
+    mut aim_reset: ResMut<CameraAimReset>,
+    weapon_slots: Query<&Interaction, With<WeaponSlot>>,
     camera: Single<(&mut Transform, &mut BattlefieldCamera)>,
 ) {
     let (tanks, turn, flight, presentation) = gameplay;
@@ -2898,6 +3092,16 @@ fn update_battlefield_camera(
         turn.0.clone(),
         flight.0.and_then(FiredShot::presentation_projectile),
     );
+    if aim_reset.0 && matches!(intent, CameraPresentationIntent::ActivePlayer(_)) {
+        let pose = camera_pose_for_intent(intent, tanks.0.clone(), turn.0.clone());
+        controller.target = pose.target;
+        controller.yaw = pose.yaw;
+        controller.pitch = pose.pitch;
+        controller.distance = pose.distance;
+        controller.desired_pose = pose;
+        controller.tracked_aim_yaw = active_aim_yaw(intent, turn.0.clone());
+        aim_reset.0 = false;
+    }
     if controller.presentation_intent != Some(intent)
         || matches!(
             intent,
@@ -2916,7 +3120,10 @@ fn update_battlefield_camera(
     }
 
     if matches!(intent, CameraPresentationIntent::ActivePlayer(_))
-        && mouse_buttons.pressed(MouseButton::Right)
+        && mouse_buttons.pressed(MouseButton::Left)
+        && weapon_slots
+            .iter()
+            .all(|interaction| *interaction == Interaction::None)
     {
         // Mouse motion already represents the full movement since the prior frame.
         controller.yaw -= mouse_motion.delta.x * CAMERA_ORBIT_SENSITIVITY;
@@ -3574,7 +3781,7 @@ mod tests {
         );
         assert_eq!(
             hud_field_text(HudTextField::Controls, &view),
-            "1 BASIC | 2 HE | 3 HEAVY | 4 MIRV | 5 CLUSTER | 6 NET | 7 ROLLER | 8 BUNKER\nM MOVE | SPACE FIRE | ARROWS AIM | -/= POWER"
+            "CLICK WEAPON BAR | 1–8 WEAPONS | M MOVE | SPACE FIRE\nLEFT-DRAG CAMERA | SCROLL ZOOM | ARROWS AIM | -/= POWER"
         );
 
         assert!(
