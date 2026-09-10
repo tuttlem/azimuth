@@ -89,9 +89,9 @@ abstract units per second. Holding Shift makes those changes 5 degrees or 2.5 un
 wraps from 0 through less than 360 degrees; elevation clamps to 5–85 degrees; launch velocity
 clamps to 8–30 units per second.
 
-Each player selects a conventional weapon only during a choosing turn: `1` selects unlimited Basic
-Shell, `2` selects High Explosive when a round remains, and `3` selects Heavy Shell when a round
-remains. Press Space commits that weapon and fires the current player's state from that player's
+Each player selects a weapon only during a choosing turn: `1` selects unlimited Basic
+Shell, `2` selects High Explosive when a round remains, `3` selects Heavy Shell when a round
+remains, and `4` selects MIRV when a round remains. Press Space commits that weapon and fires the current player's
 current barrel-end firing origin. Basic Shell uses the established 6-unit / 40-damage blast and
 4-unit / 1.8-depth crater. High Explosive has two rounds per player and uses the same flight but an
 8-unit / 60-damage blast and 6-unit / 3-depth crater. Heavy Shell has two rounds per player, the
@@ -104,6 +104,12 @@ or resulting tank settling is resolving, all aiming and fire input is ignored. T
 applies its authoritative crater and completes living-tank settling before control changes; normal
 non-impact termination also changes control without an impact. Each player's selected settings
 remain available when their next turn begins, enabling bracketing.
+
+MIRV has two rounds per player. It launches one ordinary wind-affected carrier, then—if it survives
+to the first fixed step with non-positive vertical velocity—replaces it with five deterministic
+children. Each child inherits carrier state plus a small fixed horizontal separation, uses the same
+gravity/wind/swept terrain test, and can impact or leave bounds independently. The firing turn does
+not complete until every child is gone and any tank settling caused by the barrage is complete.
 
 The default gravity magnitude is 8 abstract units per second squared. At match start, wind is
 sampled once with a random horizontal direction and a gentle strength from 0.75 through 1.75

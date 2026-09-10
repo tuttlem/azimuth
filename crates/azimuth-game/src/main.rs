@@ -252,7 +252,11 @@ struct MatchSetupDetails;
 #[derive(Resource)]
 struct ProjectileVisualAssets {
     mesh: Handle<Mesh>,
-    material: Handle<StandardMaterial>,
+    basic_material: Handle<StandardMaterial>,
+    high_explosive_material: Handle<StandardMaterial>,
+    heavy_material: Handle<StandardMaterial>,
+    mirv_carrier_material: Handle<StandardMaterial>,
+    mirv_child_material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource)]
@@ -649,7 +653,13 @@ fn spawn_battlefield_scene(
 
     commands.insert_resource(ProjectileVisualAssets {
         mesh: meshes.add(Sphere::new(0.28)),
-        material: materials.add(Color::srgb(1.0, 0.92, 0.35)),
+        // Projectiles remain deliberately simple, but hot saturated colours make them read as
+        // ordnance rather than friendly UI marbles at normal tactical-camera distance.
+        basic_material: materials.add(Color::srgb(0.95, 0.32, 0.08)),
+        high_explosive_material: materials.add(Color::srgb(1.0, 0.08, 0.02)),
+        heavy_material: materials.add(Color::srgb(0.20, 0.22, 0.24)),
+        mirv_carrier_material: materials.add(Color::srgb(0.65, 0.08, 0.08)),
+        mirv_child_material: materials.add(Color::srgb(0.18, 0.02, 0.02)),
     });
     commands.insert_resource(ImpactMarkerAssets {
         mesh: meshes.add(Sphere::new(0.18)),
@@ -1090,7 +1100,7 @@ fn fire_current_player(
         Name::new("Aimed projectile"),
         ProjectileVisual,
         Mesh3d(assets.mesh.clone()),
-        MeshMaterial3d(assets.material.clone()),
+        MeshMaterial3d(projectile_material(&assets, definition.id)),
         Transform::from_translation(to_bevy_position(shot.projectile.position)),
     ));
     // Successful shared launch is the sole physical fire boundary for Human and AI turns.
@@ -1116,6 +1126,20 @@ fn fire_current_player(
     latest_impact.explosion_visual_scale = 1.0;
     latest_impact.hit_tank = false;
     true
+}
+
+fn projectile_material(
+    assets: &ProjectileVisualAssets,
+    weapon: WeaponId,
+) -> Handle<StandardMaterial> {
+    match weapon {
+        WeaponId::BasicShell => assets.basic_material.clone(),
+        WeaponId::HighExplosive => assets.high_explosive_material.clone(),
+        WeaponId::HeavyShell => assets.heavy_material.clone(),
+        WeaponId::Mirv => assets.mirv_carrier_material.clone(),
+        #[cfg(test)]
+        WeaponId::TestConventional => assets.basic_material.clone(),
+    }
 }
 
 fn current_player_is_human(configuration: &MatchConfiguration, turn: &TurnState) -> bool {
@@ -1173,7 +1197,9 @@ fn update_shot_presentation(
             presentation.phase = ShotPresentationPhase::Flight {
                 mode: shot_mode_for_player(&configuration.0, turn.0.current_player),
                 shooter: turn.0.current_player,
-                apex_seen: shot.projectile.velocity.y <= 0.0,
+                apex_seen: shot
+                    .presentation_projectile()
+                    .is_some_and(|projectile| projectile.velocity.y <= 0.0),
             };
         }
         (
@@ -1187,7 +1213,10 @@ fn update_shot_presentation(
             presentation.phase = ShotPresentationPhase::Flight {
                 mode,
                 shooter,
-                apex_seen: apex_seen || shot.projectile.velocity.y <= 0.0,
+                apex_seen: apex_seen
+                    || shot
+                        .presentation_projectile()
+                        .is_some_and(|projectile| projectile.velocity.y <= 0.0),
             };
         }
         (ShotPresentationPhase::Flight { .. }, None) if latest_impact.impact.is_some() => {
@@ -1303,6 +1332,8 @@ fn select_weapon_input(
         Some(WeaponId::HighExplosive)
     } else if keyboard.just_pressed(KeyCode::Digit3) {
         Some(WeaponId::HeavyShell)
+    } else if keyboard.just_pressed(KeyCode::Digit4) {
+        Some(WeaponId::Mirv)
     } else {
         None
     };
@@ -2238,20 +2269,91 @@ fn advance_projectile(
         return;
     };
 
+    if shot.split {
+        for index in 0..shot.children.len() {
+            let Some(mut child) = shot.children[index] else {
+                continue;
+            };
+            match child.advance_with_terrain(
+                gravity.0,
+                wind.0,
+                SimulationLimits::BATTLEFIELD,
+                |x, z| terrain.0.height_if_within_bounds(x, z),
+            ) {
+                ProjectileAdvance::Active => shot.children[index] = Some(child),
+                ProjectileAdvance::TerrainImpact(impact) => {
+                    let health_before = tanks.0.iter().map(|tank| tank.health).collect::<Vec<_>>();
+                    resolve_explosion(&mut tanks.0, impact.position, shot.impact);
+                    terrain.0.apply_crater(impact.position, shot.impact.crater);
+                    latest_impact.impact = Some(impact);
+                    latest_impact.explosion_visual_scale = shot.impact.explosion_visual_scale;
+                    latest_impact.hit_tank = tanks
+                        .0
+                        .iter()
+                        .zip(health_before)
+                        .any(|(tank, health)| tank.health < health);
+                    reconcile_living_tank_support(&mut tanks.0, &terrain.0);
+                    shot.children[index] = None;
+                }
+                ProjectileAdvance::OutOfBounds => shot.children[index] = None,
+            }
+        }
+        if shot.has_active_projectiles() {
+            flight.0 = Some(shot);
+        } else if !any_living_tank_is_settling(&tanks.0) {
+            assert!(turn.0.complete_fire_resolution(survivors(&tanks.0)));
+            flight.0 = None;
+        } else {
+            flight.0 = None;
+        }
+        return;
+    }
+
     let advance = shot.projectile.advance_with_terrain(
         gravity.0,
         wind.0,
         SimulationLimits::BATTLEFIELD,
         |x, z| terrain.0.height_if_within_bounds(x, z),
     );
-    flight.0 = resolve_projectile_advance(
-        shot,
-        advance,
-        &mut terrain.0,
-        &mut tanks.0,
-        &mut latest_impact,
-        &mut turn.0,
-    );
+    if shot.is_mirv_carrier()
+        && matches!(advance, ProjectileAdvance::Active)
+        && shot.projectile.velocity.y <= 0.0
+    {
+        let carrier = shot.projectile;
+        let forward = WorldVector {
+            x: carrier.velocity.x,
+            y: 0.0,
+            z: carrier.velocity.z,
+        };
+        let length = (forward.x * forward.x + forward.z * forward.z)
+            .sqrt()
+            .max(0.001);
+        let right = WorldVector {
+            x: -forward.z / length,
+            y: 0.0,
+            z: forward.x / length,
+        };
+        let offsets = [-2.0, -1.0, 0.0, 1.0, 2.0];
+        for (index, lateral) in offsets.into_iter().enumerate() {
+            let mut child = carrier;
+            child.velocity = child
+                .velocity
+                .added(right.scaled(lateral * 0.8))
+                .added(forward.scaled((index as f32 - 2.0) * 0.08));
+            shot.children[index] = Some(child);
+        }
+        shot.split = true;
+        flight.0 = Some(shot);
+    } else {
+        flight.0 = resolve_projectile_advance(
+            shot,
+            advance,
+            &mut terrain.0,
+            &mut tanks.0,
+            &mut latest_impact,
+            &mut turn.0,
+        );
+    }
 }
 
 fn resolve_projectile_advance(
@@ -2352,15 +2454,49 @@ fn sync_battlefield_mesh(
 
 fn sync_projectile_visual(
     flight: Res<ProjectileFlight>,
+    assets: Res<ProjectileVisualAssets>,
     mut commands: Commands,
-    mut visuals: Query<(Entity, &mut Transform), With<ProjectileVisual>>,
+    mut visuals: Query<
+        (
+            Entity,
+            &mut Transform,
+            &mut MeshMaterial3d<StandardMaterial>,
+        ),
+        With<ProjectileVisual>,
+    >,
 ) {
     if let Some(shot) = flight.0 {
-        for (_, mut transform) in &mut visuals {
-            transform.translation = to_bevy_position(shot.projectile.position);
+        let positions = if shot.split {
+            shot.children
+                .iter()
+                .filter_map(|child| *child)
+                .map(|child| child.position)
+                .collect::<Vec<_>>()
+        } else {
+            vec![shot.projectile.position]
+        };
+        let mut existing = visuals.iter_mut();
+        for position in &positions {
+            if let Some((_, mut transform, mut material)) = existing.next() {
+                transform.translation = to_bevy_position(*position);
+                if shot.split {
+                    material.0 = assets.mirv_child_material.clone();
+                }
+            } else {
+                commands.spawn((
+                    Name::new("MIRV child projectile"),
+                    ProjectileVisual,
+                    Mesh3d(assets.mesh.clone()),
+                    MeshMaterial3d(assets.mirv_child_material.clone()),
+                    Transform::from_translation(to_bevy_position(*position)),
+                ));
+            }
+        }
+        for (entity, _, _) in existing {
+            commands.entity(entity).despawn();
         }
     } else {
-        for (entity, _) in &mut visuals {
+        for (entity, _, _) in &mut visuals {
             commands.entity(entity).despawn();
         }
     }
@@ -2603,7 +2739,7 @@ fn update_battlefield_camera(
     let intent = camera_presentation_intent(
         *presentation,
         turn.0.clone(),
-        flight.0.map(|shot| shot.projectile),
+        flight.0.and_then(FiredShot::presentation_projectile),
     );
     if controller.presentation_intent != Some(intent)
         || matches!(

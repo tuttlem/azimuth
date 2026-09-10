@@ -6,6 +6,8 @@ use crate::{
 
 pub const HIGH_EXPLOSIVE_STARTING_ROUNDS: u8 = 2;
 pub const HEAVY_SHELL_STARTING_ROUNDS: u8 = 2;
+pub const MIRV_STARTING_ROUNDS: u8 = 2;
+pub const MIRV_CHILD_COUNT: usize = 5;
 
 /// Stable gameplay identity. Display names and inventory storage order are never identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -13,6 +15,7 @@ pub enum WeaponId {
     BasicShell,
     HighExplosive,
     HeavyShell,
+    Mirv,
     #[cfg(test)]
     TestConventional,
 }
@@ -116,6 +119,18 @@ pub fn weapon_definition(id: WeaponId) -> WeaponDefinition {
                 explosion_visual_scale: 1.0,
             },
         ),
+        WeaponId::Mirv => WeaponDefinition::new(
+            WeaponId::Mirv,
+            "MIRV",
+            AmmunitionRule::Limited(MIRV_STARTING_ROUNDS),
+            STANDARD_BALLISTIC_PROJECTILE,
+            ImpactProfile {
+                damage_radius: 3.5,
+                maximum_damage: 22,
+                crater: Crater::new(2.4, 0.9).expect("MIRV child crater must be valid"),
+                explosion_visual_scale: 0.65,
+            },
+        ),
         #[cfg(test)]
         WeaponId::TestConventional => test_conventional_definition(),
     }
@@ -160,6 +175,7 @@ pub struct PlayerWeaponLoadout {
     basic_shell: WeaponAvailability,
     high_explosive: WeaponAvailability,
     heavy_shell: WeaponAvailability,
+    mirv: WeaponAvailability,
 }
 
 impl Default for PlayerWeaponLoadout {
@@ -175,6 +191,7 @@ impl Default for PlayerWeaponLoadout {
             heavy_shell: WeaponAvailability::from_rule(
                 weapon_definition(WeaponId::HeavyShell).ammunition,
             ),
+            mirv: WeaponAvailability::from_rule(weapon_definition(WeaponId::Mirv).ammunition),
         }
     }
 }
@@ -189,6 +206,7 @@ impl PlayerWeaponLoadout {
             WeaponId::BasicShell => self.basic_shell,
             WeaponId::HighExplosive => self.high_explosive,
             WeaponId::HeavyShell => self.heavy_shell,
+            WeaponId::Mirv => self.mirv,
             #[cfg(test)]
             WeaponId::TestConventional => WeaponAvailability::Unlimited,
         }
@@ -210,6 +228,7 @@ impl PlayerWeaponLoadout {
             WeaponId::BasicShell => &mut self.basic_shell,
             WeaponId::HighExplosive => &mut self.high_explosive,
             WeaponId::HeavyShell => &mut self.heavy_shell,
+            WeaponId::Mirv => &mut self.mirv,
             #[cfg(test)]
             WeaponId::TestConventional => return None,
         };
@@ -260,13 +279,15 @@ impl PlayerWeaponLoadouts {
     }
 }
 
-/// Immutable ordinary-shot authority. Flight advances only `projectile`; impact uses the copied
-/// profile and never looks back at mutable selection or inventory.
+/// A committed shot owns all of its active projectiles.  The fixed array is deliberately the
+/// demonstrated five-child MIRV limit, not a general projectile behaviour graph.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FiredShot {
     pub weapon: WeaponId,
     pub projectile: Projectile,
     pub impact: ImpactProfile,
+    pub children: [Option<Projectile>; MIRV_CHILD_COUNT],
+    pub split: bool,
 }
 
 impl FiredShot {
@@ -275,6 +296,23 @@ impl FiredShot {
             weapon: definition.id,
             projectile,
             impact: definition.impact,
+            children: [None; MIRV_CHILD_COUNT],
+            split: false,
+        }
+    }
+
+    pub fn is_mirv_carrier(self) -> bool {
+        self.weapon == WeaponId::Mirv && !self.split
+    }
+    pub fn has_active_projectiles(self) -> bool {
+        !self.split || self.children.iter().any(Option::is_some)
+    }
+
+    pub fn presentation_projectile(self) -> Option<Projectile> {
+        if self.split {
+            self.children.iter().find_map(|child| *child)
+        } else {
+            Some(self.projectile)
         }
     }
 }
@@ -315,6 +353,25 @@ mod tests {
         assert!(he.impact.damage_radius > basic.impact.damage_radius);
         assert!(he.impact.maximum_damage > basic.impact.maximum_damage);
         assert_eq!(he.ammunition, AmmunitionRule::Limited(2));
+    }
+
+    #[test]
+    fn mirv_is_limited_and_each_child_profile_is_smaller_than_he() {
+        let mirv = weapon_definition(WeaponId::Mirv);
+        let he = weapon_definition(WeaponId::HighExplosive);
+        assert_eq!(
+            mirv.ammunition,
+            AmmunitionRule::Limited(MIRV_STARTING_ROUNDS)
+        );
+        assert!(mirv.impact.maximum_damage < he.impact.maximum_damage);
+        assert!(mirv.impact.damage_radius < he.impact.damage_radius);
+        let mut loadout = PlayerWeaponLoadout::default();
+        assert!(loadout.select(WeaponId::Mirv));
+        assert_eq!(loadout.commit_selected().unwrap().id, WeaponId::Mirv);
+        assert_eq!(
+            loadout.availability(WeaponId::Mirv),
+            WeaponAvailability::Remaining(1)
+        );
     }
 
     #[test]

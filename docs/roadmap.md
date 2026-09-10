@@ -536,6 +536,9 @@ Weapons should range from simple artillery shells to absurd toys.
 
 Every weapon should create a meaningful gameplay difference.
 
+The next deliberate phase is **Arsenal**: add small, playtested weapon slices that create genuinely
+different choices, beginning with multi-projectile coverage rather than merely larger explosions.
+
 ## Initial Weapons
 
 * [x] Basic explosive shell.
@@ -551,11 +554,13 @@ wind-resistance is visible and useful without making it wind-immune.
 
 ## Cluster / Multi-Projectile Weapons
 
-* [ ] MIRV-style projectile.
+* [x] MIRV-style projectile.
 * [ ] Cluster bomb.
 * [ ] Configurable split altitude or split timing if gameplay supports it.
-* [ ] Independent child-projectile trajectories.
-* [ ] Wind interaction for child projectiles.
+* [x] Independent child-projectile trajectories.
+* [x] Wind interaction for child projectiles.
+* [ ] Bomb Net: deploy a broad, readable horizontal grid or net of small explosives.
+* [ ] Death Sphere: an unusual looping or figure-eight carrier that periodically drops small explosives.
 
 ## Terrain Weapons
 
@@ -571,6 +576,7 @@ wind-resistance is visible and useful without making it wind-immune.
 * [ ] Projectile affected by terrain slope after landing.
 * [ ] Bouncing projectile.
 * [ ] Experimental tunnelling weapon if feasible.
+* [ ] Expanded rolling and terrain-following weapons that turn slopes and valleys into the weapon's path.
 
 ## Area-Denial Weapons
 
@@ -593,9 +599,11 @@ Potential ideas:
 * [ ] Implosion weapon.
 * [ ] Chain-reaction explosive.
 * [ ] Weapon that fragments repeatedly.
+* [ ] Curve Ball: a projectile with deliberate lateral flight curvature for shots around terrain.
 * [ ] Weapon whose behaviour depends strongly on atmosphere.
 * [ ] Weapon designed specifically for low-gravity worlds.
 * [ ] Weapon designed specifically for high-gravity worlds.
+* [ ] Large area explosive, temporary hazard, terrain-destroying projectile, piercing directed weapon, and multi-warhead families inspired by classic artillery play but developed for Azimuth's own identity.
 * [ ] Other ridiculous ideas discovered during play.
 
 Weapons should remain fun, readable, and distinguishable rather than merely numerous.
