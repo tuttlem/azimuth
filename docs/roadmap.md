@@ -543,7 +543,7 @@ different choices, beginning with multi-projectile coverage rather than merely l
 
 * [x] Basic explosive shell.
 * [x] High-explosive shell.
-* [ ] Large-radius explosive.
+* [x] Large-radius explosive.
 * [ ] Small precise projectile.
 * [x] Heavy projectile with reduced wind sensitivity.
 
@@ -566,7 +566,7 @@ wind-resistance is visible and useful without making it wind-immune.
 
 * [ ] Crater-focused weapon.
 * [x] Deep/narrow penetrator.
-* [ ] Terrain-building dirt bomb.
+* [x] Terrain-building dirt bomb.
 * [ ] Terrain-flattening weapon.
 * [ ] Ridge/wall-forming weapon if fun.
 
@@ -574,7 +574,7 @@ wind-resistance is visible and useful without making it wind-immune.
 
 * [x] Rolling bomb.
 * [x] Projectile affected by terrain slope after landing.
-* [ ] Bouncing projectile.
+* [x] Bouncing projectile.
 * [ ] Experimental tunnelling weapon if feasible.
 * [ ] Expanded rolling and terrain-following weapons that turn slopes and valleys into the weapon's path.
 
@@ -590,7 +590,7 @@ wind-resistance is visible and useful without making it wind-immune.
 
 Potential ideas:
 
-* [ ] Extremely large bomb.
+* [x] Extremely large bomb.
 * [ ] Deliberately unreliable experimental weapon.
 * [ ] Reverse-gravity projectile.
 * [ ] Projectile that changes gravity locally.
@@ -599,7 +599,7 @@ Potential ideas:
 * [ ] Implosion weapon.
 * [ ] Chain-reaction explosive.
 * [ ] Weapon that fragments repeatedly.
-* [ ] Curve Ball: a projectile with deliberate lateral flight curvature for shots around terrain.
+* [x] Curve Ball: a projectile with deliberate lateral flight curvature for shots around terrain.
 * [ ] Weapon whose behaviour depends strongly on atmosphere.
 * [ ] Weapon designed specifically for low-gravity worlds.
 * [ ] Weapon designed specifically for high-gravity worlds.
@@ -1155,7 +1155,7 @@ These are conceptual milestones rather than fixed specification sequences.
 * [x] Several distinct weapons exist.
 * [x] At least one cluster/MIRV weapon exists.
 * [x] At least one terrain-manipulation weapon exists.
-* [ ] At least one ridiculous weapon exists.
+* [x] At least one ridiculous weapon exists.
 * [x] Weapon selection creates meaningful tactical choices.
 
 ## Milestone H — Complete Match Experience

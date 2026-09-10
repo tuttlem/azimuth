@@ -55,4 +55,13 @@ impl WorldVector {
             z: self.z + other.z,
         }
     }
+
+    pub fn dot(self, other: Self) -> f32 {
+        self.x * other.x + self.y * other.y + self.z * other.z
+    }
+
+    pub fn normalized(self) -> Self {
+        let length = self.dot(self).sqrt().max(0.000_1);
+        self.scaled(1.0 / length)
+    }
 }

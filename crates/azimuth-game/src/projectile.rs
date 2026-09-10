@@ -253,11 +253,34 @@ impl Projectile {
     where
         F: Fn(f32, f32) -> Option<f32>,
     {
+        self.advance_with_terrain_and_acceleration(
+            gravity,
+            wind,
+            WorldVector::ZERO,
+            limits,
+            terrain_height,
+        )
+    }
+
+    pub fn advance_with_terrain_and_acceleration<F>(
+        &mut self,
+        gravity: Gravity,
+        wind: Wind,
+        extra_acceleration: WorldVector,
+        limits: SimulationLimits,
+        terrain_height: F,
+    ) -> ProjectileAdvance
+    where
+        F: Fn(f32, f32) -> Option<f32>,
+    {
         let previous_position = self.position;
-        let acceleration = gravity.acceleration().added(
-            wind.horizontal_acceleration()
-                .scaled(self.wind_response.factor()),
-        );
+        let acceleration = gravity
+            .acceleration()
+            .added(
+                wind.horizontal_acceleration()
+                    .scaled(self.wind_response.factor()),
+            )
+            .added(extra_acceleration);
         let step = FIXED_STEP_SECONDS;
         let displacement = self
             .velocity
@@ -1320,5 +1343,38 @@ mod tests {
         }
         assert_eq!(normal.position, reduced.position);
         assert_eq!(normal.velocity, reduced.velocity);
+    }
+
+    #[test]
+    fn optional_lateral_acceleration_composes_without_changing_zero_acceleration_flight() {
+        let gravity = Gravity::new(8.0).unwrap();
+        let limits = generous_limits();
+        let mut ordinary = launch(0.0, 45.0, 10.0);
+        let mut zero = ordinary;
+        let mut curved = ordinary;
+        for _ in 0..120 {
+            ordinary.advance_with_terrain(gravity, calm_wind(), limits, no_terrain);
+            zero.advance_with_terrain_and_acceleration(
+                gravity,
+                calm_wind(),
+                WorldVector::ZERO,
+                limits,
+                no_terrain,
+            );
+            curved.advance_with_terrain_and_acceleration(
+                gravity,
+                calm_wind(),
+                WorldVector {
+                    x: 2.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+                limits,
+                no_terrain,
+            );
+        }
+        assert_eq!(ordinary, zero);
+        assert!(curved.position.x > ordinary.position.x);
+        assert_eq!(curved.position.y, ordinary.position.y);
     }
 }

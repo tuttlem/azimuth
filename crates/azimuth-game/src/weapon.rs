@@ -1,5 +1,5 @@
 use crate::{
-    battlefield::Crater,
+    battlefield::{Crater, Mound},
     projectile::{Projectile, WindResponse},
     tank::PlayerId,
 };
@@ -11,6 +11,10 @@ pub const CLUSTER_BOMB_STARTING_ROUNDS: u8 = 2;
 pub const BOMB_NET_STARTING_ROUNDS: u8 = 1;
 pub const ROLLER_STARTING_ROUNDS: u8 = 2;
 pub const BUNKER_BUSTER_STARTING_ROUNDS: u8 = 2;
+pub const DIRT_BOMB_STARTING_ROUNDS: u8 = 2;
+pub const CURVE_BALL_STARTING_ROUNDS: u8 = 2;
+pub const BOUNCER_STARTING_ROUNDS: u8 = 2;
+pub const NUKE_STARTING_ROUNDS: u8 = 1;
 pub const MIRV_CHILD_COUNT: usize = 5;
 pub const CLUSTER_BOMB_CHILD_COUNT: usize = 10;
 pub const BOMB_NET_CHILD_COUNT: usize = 16;
@@ -28,6 +32,10 @@ pub enum WeaponId {
     BombNet,
     Roller,
     BunkerBuster,
+    DirtBomb,
+    CurveBall,
+    Bouncer,
+    Nuke,
     #[cfg(test)]
     TestConventional,
 }
@@ -61,6 +69,7 @@ pub struct ImpactProfile {
     pub damage_radius: f32,
     pub maximum_damage: u8,
     pub crater: Crater,
+    pub mound: Option<Mound>,
     pub explosion_visual_scale: f32,
 }
 
@@ -104,6 +113,7 @@ pub fn weapon_definition(id: WeaponId) -> WeaponDefinition {
                 damage_radius: 6.0,
                 maximum_damage: 40,
                 crater: Crater::new(4.0, 1.8).expect("basic shell crater must be valid"),
+                mound: None,
                 explosion_visual_scale: 1.0,
             },
         ),
@@ -116,6 +126,7 @@ pub fn weapon_definition(id: WeaponId) -> WeaponDefinition {
                 damage_radius: 8.0,
                 maximum_damage: 60,
                 crater: Crater::new(6.0, 3.0).expect("high explosive crater must be valid"),
+                mound: None,
                 explosion_visual_scale: 1.5,
             },
         ),
@@ -128,6 +139,7 @@ pub fn weapon_definition(id: WeaponId) -> WeaponDefinition {
                 damage_radius: 6.0,
                 maximum_damage: 40,
                 crater: Crater::new(4.0, 1.8).expect("heavy shell crater must be valid"),
+                mound: None,
                 explosion_visual_scale: 1.0,
             },
         ),
@@ -140,6 +152,7 @@ pub fn weapon_definition(id: WeaponId) -> WeaponDefinition {
                 damage_radius: 3.5,
                 maximum_damage: 22,
                 crater: Crater::new(2.4, 0.9).expect("MIRV child crater must be valid"),
+                mound: None,
                 explosion_visual_scale: 0.65,
             },
         ),
@@ -152,6 +165,7 @@ pub fn weapon_definition(id: WeaponId) -> WeaponDefinition {
                 damage_radius: 2.6,
                 maximum_damage: 16,
                 crater: Crater::new(1.8, 0.65).expect("cluster crater"),
+                mound: None,
                 explosion_visual_scale: 0.45,
             },
         ),
@@ -164,6 +178,7 @@ pub fn weapon_definition(id: WeaponId) -> WeaponDefinition {
                 damage_radius: 2.1,
                 maximum_damage: 12,
                 crater: Crater::new(1.45, 0.5).expect("net crater"),
+                mound: None,
                 explosion_visual_scale: 0.35,
             },
         ),
@@ -176,6 +191,7 @@ pub fn weapon_definition(id: WeaponId) -> WeaponDefinition {
                 damage_radius: 5.5,
                 maximum_damage: 38,
                 crater: Crater::new(3.8, 1.55).expect("roller crater"),
+                mound: None,
                 explosion_visual_scale: 0.9,
             },
         ),
@@ -188,7 +204,60 @@ pub fn weapon_definition(id: WeaponId) -> WeaponDefinition {
                 damage_radius: 6.5,
                 maximum_damage: 48,
                 crater: Crater::new(2.8, 3.6).expect("bunker crater"),
+                mound: None,
                 explosion_visual_scale: 1.15,
+            },
+        ),
+        WeaponId::DirtBomb => WeaponDefinition::new(
+            WeaponId::DirtBomb,
+            "DIRT BOMB",
+            AmmunitionRule::Limited(DIRT_BOMB_STARTING_ROUNDS),
+            STANDARD_BALLISTIC_PROJECTILE,
+            ImpactProfile {
+                damage_radius: 0.0,
+                maximum_damage: 0,
+                crater: Crater::new(1.0, 0.01).unwrap(),
+                mound: Some(Mound::new(8.0, 5.0).unwrap()),
+                explosion_visual_scale: 0.45,
+            },
+        ),
+        WeaponId::CurveBall => WeaponDefinition::new(
+            WeaponId::CurveBall,
+            "CURVE BALL",
+            AmmunitionRule::Limited(CURVE_BALL_STARTING_ROUNDS),
+            STANDARD_BALLISTIC_PROJECTILE,
+            ImpactProfile {
+                damage_radius: 5.5,
+                maximum_damage: 38,
+                crater: Crater::new(3.8, 1.55).unwrap(),
+                mound: None,
+                explosion_visual_scale: 0.9,
+            },
+        ),
+        WeaponId::Bouncer => WeaponDefinition::new(
+            WeaponId::Bouncer,
+            "BOUNCER",
+            AmmunitionRule::Limited(BOUNCER_STARTING_ROUNDS),
+            STANDARD_BALLISTIC_PROJECTILE,
+            ImpactProfile {
+                damage_radius: 5.5,
+                maximum_damage: 38,
+                crater: Crater::new(3.8, 1.55).unwrap(),
+                mound: None,
+                explosion_visual_scale: 0.9,
+            },
+        ),
+        WeaponId::Nuke => WeaponDefinition::new(
+            WeaponId::Nuke,
+            "NUKE",
+            AmmunitionRule::Limited(NUKE_STARTING_ROUNDS),
+            STANDARD_BALLISTIC_PROJECTILE,
+            ImpactProfile {
+                damage_radius: 28.0,
+                maximum_damage: 100,
+                crater: Crater::new(18.0, 9.0).unwrap(),
+                mound: None,
+                explosion_visual_scale: 4.5,
             },
         ),
         #[cfg(test)]
@@ -240,6 +309,10 @@ pub struct PlayerWeaponLoadout {
     bomb_net: WeaponAvailability,
     roller: WeaponAvailability,
     bunker_buster: WeaponAvailability,
+    dirt_bomb: WeaponAvailability,
+    curve_ball: WeaponAvailability,
+    bouncer: WeaponAvailability,
+    nuke: WeaponAvailability,
 }
 
 impl Default for PlayerWeaponLoadout {
@@ -266,6 +339,14 @@ impl Default for PlayerWeaponLoadout {
             bunker_buster: WeaponAvailability::from_rule(
                 weapon_definition(WeaponId::BunkerBuster).ammunition,
             ),
+            dirt_bomb: WeaponAvailability::from_rule(
+                weapon_definition(WeaponId::DirtBomb).ammunition,
+            ),
+            curve_ball: WeaponAvailability::from_rule(
+                weapon_definition(WeaponId::CurveBall).ammunition,
+            ),
+            bouncer: WeaponAvailability::from_rule(weapon_definition(WeaponId::Bouncer).ammunition),
+            nuke: WeaponAvailability::from_rule(weapon_definition(WeaponId::Nuke).ammunition),
         }
     }
 }
@@ -285,6 +366,10 @@ impl PlayerWeaponLoadout {
             WeaponId::BombNet => self.bomb_net,
             WeaponId::Roller => self.roller,
             WeaponId::BunkerBuster => self.bunker_buster,
+            WeaponId::DirtBomb => self.dirt_bomb,
+            WeaponId::CurveBall => self.curve_ball,
+            WeaponId::Bouncer => self.bouncer,
+            WeaponId::Nuke => self.nuke,
             #[cfg(test)]
             WeaponId::TestConventional => WeaponAvailability::Unlimited,
         }
@@ -311,6 +396,10 @@ impl PlayerWeaponLoadout {
             WeaponId::BombNet => &mut self.bomb_net,
             WeaponId::Roller => &mut self.roller,
             WeaponId::BunkerBuster => &mut self.bunker_buster,
+            WeaponId::DirtBomb => &mut self.dirt_bomb,
+            WeaponId::CurveBall => &mut self.curve_ball,
+            WeaponId::Bouncer => &mut self.bouncer,
+            WeaponId::Nuke => &mut self.nuke,
             #[cfg(test)]
             WeaponId::TestConventional => return None,
         };
@@ -373,6 +462,9 @@ pub enum ContactState {
         remaining_steps: u8,
         direction: crate::world::WorldVector,
     },
+    Bouncing {
+        remaining_bounces: u8,
+    },
 }
 
 /// A committed shot owns all of its active projectiles. The fixed array is sized by the concrete
@@ -432,6 +524,7 @@ pub fn test_conventional_definition() -> WeaponDefinition {
             damage_radius: 5.0,
             maximum_damage: 25,
             crater: Crater::new(3.0, 1.0).expect("test crater must be valid"),
+            mound: None,
             explosion_visual_scale: 0.8,
         },
     )
@@ -648,5 +741,28 @@ mod tests {
                 .availability(WeaponId::HeavyShell),
             WeaponAvailability::Remaining(2)
         );
+    }
+
+    #[test]
+    fn arsenal_pack_two_profiles_are_limited_and_distinct() {
+        let dirt = weapon_definition(WeaponId::DirtBomb);
+        let curve = weapon_definition(WeaponId::CurveBall);
+        let bounce = weapon_definition(WeaponId::Bouncer);
+        let nuke = weapon_definition(WeaponId::Nuke);
+        assert_eq!(dirt.ammunition, AmmunitionRule::Limited(2));
+        assert_eq!(nuke.ammunition, AmmunitionRule::Limited(1));
+        assert!(dirt.impact.mound.is_some() && dirt.impact.maximum_damage == 0);
+        assert_eq!(curve.ammunition, AmmunitionRule::Limited(2));
+        assert_eq!(bounce.ammunition, AmmunitionRule::Limited(2));
+        assert!(
+            nuke.impact.damage_radius
+                > weapon_definition(WeaponId::HighExplosive)
+                    .impact
+                    .damage_radius
+        );
+        let mut loadout = PlayerWeaponLoadout::default();
+        assert!(loadout.select(WeaponId::Nuke));
+        assert_eq!(loadout.commit_selected().unwrap().id, WeaponId::Nuke);
+        assert!(!loadout.select(WeaponId::Nuke));
     }
 }

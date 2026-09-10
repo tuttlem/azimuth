@@ -1114,7 +1114,12 @@ fn fire_current_player(
     let parameters = launch_parameters_for_aim(tank, aiming);
     let projectile =
         Projectile::launch_with_wind_response(parameters, definition.projectile.wind_response);
-    let shot = FiredShot::new(definition, projectile);
+    let mut shot = FiredShot::new(definition, projectile);
+    if definition.id == WeaponId::Bouncer {
+        shot.contact = ContactState::Bouncing {
+            remaining_bounces: 3,
+        };
+    }
 
     commands.spawn((
         Name::new("Aimed projectile"),
@@ -1161,6 +1166,10 @@ fn projectile_material(
         WeaponId::BombNet => assets.net_material.clone(),
         WeaponId::Roller => assets.roller_material.clone(),
         WeaponId::BunkerBuster => assets.bunker_material.clone(),
+        WeaponId::DirtBomb => assets.cluster_material.clone(),
+        WeaponId::CurveBall => assets.mirv_carrier_material.clone(),
+        WeaponId::Bouncer => assets.roller_material.clone(),
+        WeaponId::Nuke => assets.high_explosive_material.clone(),
         #[cfg(test)]
         WeaponId::TestConventional => assets.basic_material.clone(),
     }
@@ -1908,9 +1917,9 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
                 position_type: PositionType::Absolute,
                 bottom: px(18),
                 left: percent(50),
-                width: px(512),
+                width: px(768),
                 height: px(62),
-                margin: UiRect::left(px(-256)),
+                margin: UiRect::left(px(-384)),
                 column_gap: px(6),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
@@ -1967,7 +1976,7 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
         });
 }
 
-fn weapon_strip_order() -> [WeaponId; 8] {
+fn weapon_strip_order() -> [WeaponId; 12] {
     [
         WeaponId::BasicShell,
         WeaponId::HighExplosive,
@@ -1977,6 +1986,10 @@ fn weapon_strip_order() -> [WeaponId; 8] {
         WeaponId::BombNet,
         WeaponId::Roller,
         WeaponId::BunkerBuster,
+        WeaponId::DirtBomb,
+        WeaponId::CurveBall,
+        WeaponId::Bouncer,
+        WeaponId::Nuke,
     ]
 }
 
@@ -1990,6 +2003,10 @@ fn weapon_strip_label(weapon: WeaponId) -> &'static str {
         WeaponId::BombNet => "NET",
         WeaponId::Roller => "ROLL",
         WeaponId::BunkerBuster => "BUNK",
+        WeaponId::DirtBomb => "DIRT",
+        WeaponId::CurveBall => "CURVE",
+        WeaponId::Bouncer => "BOUNCE",
+        WeaponId::Nuke => "NUKE",
         #[cfg(test)]
         WeaponId::TestConventional => "TEST",
     }
@@ -2373,7 +2390,7 @@ fn hud_field_text(field: HudTextField, view: &TacticalHudView) -> String {
         }),
         HudTextField::Controls => match view.action {
             HudAction::Choose => {
-                "CLICK WEAPON BAR | 1–8 WEAPONS | M MOVE | SPACE FIRE\nLEFT-DRAG CAMERA | SCROLL ZOOM | ARROWS AIM | -/= POWER".into()
+                "CLICK WEAPON BAR | M MOVE | SPACE FIRE\nLEFT-DRAG CAMERA | SCROLL ZOOM | ARROWS AIM | CURVE: ARROWS STEER IN FLIGHT | -/= POWER".into()
             }
             HudAction::Moving => "ARROWS MOVE (CAMERA) | ENTER END".into(),
             HudAction::Resolving | HudAction::Finished => String::new(),
@@ -2460,7 +2477,9 @@ fn player_name(player: PlayerId) -> String {
     format!("Player {}", player.0)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn advance_projectile(
+    keyboard: Res<ButtonInput<KeyCode>>,
     gravity: Res<BattlefieldGravity>,
     wind: Res<BattlefieldWind>,
     mut terrain: ResMut<BattlefieldState>,
@@ -2554,7 +2573,7 @@ fn advance_projectile(
             }
             return;
         }
-        ContactState::Airborne => {}
+        ContactState::Airborne | ContactState::Bouncing { .. } => {}
     }
 
     if shot.split {
@@ -2597,9 +2616,29 @@ fn advance_projectile(
         return;
     }
 
-    let advance = shot.projectile.advance_with_terrain(
+    let curve_acceleration = if shot.weapon == WeaponId::CurveBall {
+        let forward = WorldVector {
+            x: shot.projectile.velocity.x,
+            y: 0.0,
+            z: shot.projectile.velocity.z,
+        }
+        .normalized();
+        let steering = (keyboard.pressed(KeyCode::ArrowRight) as i8
+            - keyboard.pressed(KeyCode::ArrowLeft) as i8) as f32;
+        // Steering is deliberately gentle and only exists while an arrow is held in the fixed
+        // simulation. It bends relative to current flight direction, never toward a target.
+        WorldVector {
+            x: -forward.z * steering * 2.2,
+            y: 0.0,
+            z: forward.x * steering * 2.2,
+        }
+    } else {
+        WorldVector::ZERO
+    };
+    let advance = shot.projectile.advance_with_terrain_and_acceleration(
         gravity.0,
         wind.0,
+        curve_acceleration,
         SimulationLimits::BATTLEFIELD,
         |x, z| terrain.0.height_if_within_bounds(x, z),
     );
@@ -2684,6 +2723,40 @@ fn advance_projectile(
                 };
                 flight.0 = Some(shot);
             }
+            (WeaponId::Bouncer, ProjectileAdvance::TerrainImpact(impact)) => {
+                let ContactState::Bouncing { remaining_bounces } = shot.contact else {
+                    unreachable!()
+                };
+                if remaining_bounces == 0 {
+                    flight.0 = resolve_projectile_advance(
+                        shot,
+                        ProjectileAdvance::TerrainImpact(impact),
+                        &mut terrain.0,
+                        &mut tanks.0,
+                        &mut latest_impact,
+                        &mut turn.0,
+                    );
+                } else {
+                    let normal = terrain
+                        .0
+                        .surface_normal_if_within_bounds(impact.position.x, impact.position.z)
+                        .unwrap_or(WorldVector {
+                            x: 0.0,
+                            y: 1.0,
+                            z: 0.0,
+                        });
+                    let velocity = shot.projectile.velocity;
+                    let reflected = velocity
+                        .added(normal.scaled(-2.0 * velocity.dot(normal)))
+                        .scaled(0.62);
+                    shot.projectile.position = impact.position.translated(normal.scaled(0.08));
+                    shot.projectile.velocity = reflected;
+                    shot.contact = ContactState::Bouncing {
+                        remaining_bounces: remaining_bounces - 1,
+                    };
+                    flight.0 = Some(shot);
+                }
+            }
             (_, advance) => {
                 flight.0 = resolve_projectile_advance(
                     shot,
@@ -2711,7 +2784,11 @@ fn resolve_projectile_advance(
         ProjectileAdvance::TerrainImpact(impact) => {
             let health_before = tanks.iter().map(|tank| tank.health).collect::<Vec<_>>();
             resolve_explosion(tanks, impact.position, shot.impact);
-            terrain.apply_crater(impact.position, shot.impact.crater);
+            if let Some(mound) = shot.impact.mound {
+                terrain.apply_mound(impact.position, mound);
+            } else {
+                terrain.apply_crater(impact.position, shot.impact.crater);
+            }
             latest_impact.impact = Some(impact);
             latest_impact.explosion_visual_scale = shot.impact.explosion_visual_scale;
             latest_impact.hit_tank = tanks
@@ -2908,7 +2985,8 @@ fn sync_terrain_impact_explosion(
         Name::new("Terrain impact audio"),
         AudioPlayer(audio.impact.clone()),
         PlaybackSettings {
-            volume: Volume::Linear(1.15 * latest_impact.explosion_visual_scale),
+            // Large impacts keep their visual scale, but presentation volume stays comfortable.
+            volume: Volume::Linear((1.15 * latest_impact.explosion_visual_scale).min(1.6)),
             spatial: false,
             ..PlaybackSettings::DESPAWN
         },
@@ -3781,7 +3859,7 @@ mod tests {
         );
         assert_eq!(
             hud_field_text(HudTextField::Controls, &view),
-            "CLICK WEAPON BAR | 1–8 WEAPONS | M MOVE | SPACE FIRE\nLEFT-DRAG CAMERA | SCROLL ZOOM | ARROWS AIM | -/= POWER"
+            "CLICK WEAPON BAR | M MOVE | SPACE FIRE\nLEFT-DRAG CAMERA | SCROLL ZOOM | ARROWS AIM | CURVE: ARROWS STEER IN FLIGHT | -/= POWER"
         );
 
         assert!(

@@ -98,6 +98,26 @@ pub struct Crater {
     depth: f32,
 }
 
+/// A deliberately game-like radial terrain deposit. It mirrors crater deformation while adding
+/// ground, which keeps terrain generation deterministic and easy to reason about.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mound {
+    radius: f32,
+    height: f32,
+}
+
+impl Mound {
+    pub fn new(radius: f32, height: f32) -> Result<Self, CraterError> {
+        if !radius.is_finite() || radius <= 0.0 {
+            return Err(CraterError::Radius);
+        }
+        if !height.is_finite() || height <= 0.0 {
+            return Err(CraterError::Depth);
+        }
+        Ok(Self { radius, height })
+    }
+}
+
 impl Crater {
     #[cfg(test)]
     pub fn default_development() -> Self {
@@ -187,6 +207,32 @@ impl BattlefieldTerrain {
         is_within_bounds(x, z).then(|| self.height(x, z))
     }
 
+    /// Exact normal of the same current interpolation triangle used by `height`.
+    pub fn surface_normal_if_within_bounds(&self, x: f32, z: f32) -> Option<WorldVector> {
+        if !is_within_bounds(x, z) {
+            return None;
+        }
+        let (xi, xf) = terrain_cell_coordinate(x);
+        let (zi, zf) = terrain_cell_coordinate(z);
+        let ll = self.vertex_height(xi, zi);
+        let lr = self.vertex_height(xi + 1, zi);
+        let ul = self.vertex_height(xi, zi + 1);
+        let ur = self.vertex_height(xi + 1, zi + 1);
+        let (dx, dz) = if xf + zf <= 1.0 {
+            ((lr - ll) / TERRAIN_CELL_SIZE, (ul - ll) / TERRAIN_CELL_SIZE)
+        } else {
+            ((ur - ul) / TERRAIN_CELL_SIZE, (ur - lr) / TERRAIN_CELL_SIZE)
+        };
+        Some(
+            WorldVector {
+                x: -dx,
+                y: 1.0,
+                z: -dz,
+            }
+            .normalized(),
+        )
+    }
+
     /// Deterministic central-difference downhill direction on the current authoritative surface.
     /// `y` is zero because Roller only needs horizontal terrain guidance.
     pub fn downhill_direction_if_within_bounds(&self, x: f32, z: f32) -> Option<WorldVector> {
@@ -235,6 +281,25 @@ impl BattlefieldTerrain {
                 if fraction > 0.0 {
                     self.heights[vertex_index(x_index, z_index)] -=
                         crater.depth * fraction * fraction;
+                }
+            }
+        }
+    }
+
+    pub fn apply_mound(&mut self, centre: WorldPosition, mound: Mound) {
+        assert!(
+            centre.is_finite() && is_within_bounds(centre.x, centre.z),
+            "mound centre must be an in-bounds impact"
+        );
+        for z_index in 0..VERTICES_PER_SIDE {
+            for x_index in 0..VERTICES_PER_SIDE {
+                let (x, z) = vertex_position(x_index, z_index);
+                let dx = x - centre.x;
+                let dz = z - centre.z;
+                let fraction = 1.0 - (dx * dx + dz * dz) / (mound.radius * mound.radius);
+                if fraction > 0.0 {
+                    self.heights[vertex_index(x_index, z_index)] +=
+                        mound.height * fraction * fraction;
                 }
             }
         }
@@ -658,6 +723,32 @@ mod tests {
         for (x, z) in [(-HALF_EXTENT, -HALF_EXTENT), (HALF_EXTENT, HALF_EXTENT)] {
             assert!(first.height(x, z).is_finite());
         }
+    }
+
+    #[test]
+    fn mounds_are_deterministic_raise_only_their_radius_and_have_surface_normals() {
+        let mut first = BattlefieldTerrain::initial();
+        let mut second = first.clone();
+        let impact = WorldPosition {
+            x: 0.0,
+            y: 0.0,
+            z: 0.0,
+        };
+        let before = first.height(0.0, 0.0);
+        let exterior = first.height(20.0, 20.0);
+        let mound = Mound::new(8.0, 5.0).unwrap();
+        first.apply_mound(impact, mound);
+        second.apply_mound(impact, mound);
+        assert_eq!(first, second);
+        assert!(first.height(0.0, 0.0) > before);
+        assert_eq!(first.height(20.0, 20.0), exterior);
+        let normal = first.surface_normal_if_within_bounds(1.0, 0.5).unwrap();
+        assert!(normal.y > 0.0 && normal.dot(normal) > 0.99);
+        assert!(
+            first
+                .surface_normal_if_within_bounds(HALF_EXTENT + 1.0, 0.0)
+                .is_none()
+        );
     }
 
     #[test]

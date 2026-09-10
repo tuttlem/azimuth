@@ -89,10 +89,10 @@ abstract units per second. Holding Shift makes those changes 5 degrees or 2.5 un
 wraps from 0 through less than 360 degrees; elevation clamps to 5–85 degrees; launch velocity
 clamps to 8–30 units per second.
 
-Each player selects a weapon only during a choosing turn: `1` selects unlimited Basic
-Shell, `2` selects High Explosive, `3` selects Heavy Shell, `4` selects MIRV, `5` selects Cluster
-Bomb, `6` selects Bomb Net, `7` selects Roller, and `8` selects Bunker Buster when a round
-remains. Press Space commits that weapon and fires the current player's
+Each player selects an available weapon by clicking its compact bottom HUD box. The original
+`1`–`8` shortcuts remain as convenience controls for the first eight weapons; the scalable strip,
+rather than a growing set of keys, is the primary selection interface. Press Space commits the
+selected weapon and fires the current player's
 current barrel-end firing origin. Basic Shell uses the established 6-unit / 40-damage blast and
 4-unit / 1.8-depth crater. High Explosive has two rounds per player and uses the same flight but an
 8-unit / 60-damage blast and 6-unit / 3-depth crater. Heavy Shell has two rounds per player, the
@@ -126,6 +126,16 @@ displacement along its impact direction, then resolves one normal damage/deforma
 inside the terrain. Its crater is deliberately narrower and deeper than HE. Neither behaviour
 creates a rigid-body or underground physics subsystem; both remain deterministic committed-shot
 states that must resolve before turn handoff.
+
+Arsenal Pack #2 adds four bounded behaviours. Dirt Bomb uses ordinary flight but deposits a broad,
+deterministic radial mound instead of a crater and causes no conventional damage; existing tank
+support reconciliation remains the sole response to raised ground. Curve Ball remains under
+ordinary gravity and wind, while held Left/Right adds a small fixed-step lateral force relative to
+its current horizontal travel. It never inspects targets: identical fixed-step input produces an
+identical curve. Bouncer reflects velocity from the exact current terrain-triangle normal for up
+to three energy-losing non-explosive contacts, then resolves its final contact normally. Nuke is
+an ordinary one-round carrier with deliberately exceptional radial damage and crater parameters;
+its large visual remains presentation-only.
 
 The default gravity magnitude is 8 abstract units per second squared. At match start, wind is
 sampled once with a random horizontal direction and a gentle strength from 0.75 through 1.75
