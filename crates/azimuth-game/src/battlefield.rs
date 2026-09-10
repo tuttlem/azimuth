@@ -397,21 +397,44 @@ fn generated_height(x: f32, z: f32, seed: BattlefieldSeed) -> f32 {
     let mut random = seed.0;
     let mountain_x = random_range(&mut random, -42.0, -24.0);
     let mountain_z = random_range(&mut random, -30.0, 30.0);
+    let second_mountain_x = random_range(&mut random, -8.0, 38.0);
+    let second_mountain_z = random_range(&mut random, -42.0, 42.0);
+    let third_mountain_x = random_range(&mut random, -38.0, 42.0);
+    let third_mountain_z = random_range(&mut random, -45.0, 45.0);
     let ridge_x = random_range(&mut random, -10.0, 25.0);
     let ridge_z = random_range(&mut random, -35.0, 35.0);
     let ridge_angle = random_range(&mut random, -0.8, 0.8);
     let bowl_x = random_range(&mut random, 18.0, 40.0);
     let bowl_z = random_range(&mut random, -28.0, 28.0);
-    let mountain = smooth_bump(x - mountain_x, z - mountain_z, 22.0, 20.0) * 21.0;
+    // Small seed-driven features make the broad mountain/ridge/bowl composition feel less
+    // authored while staying gentle enough for spawn selection and artillery readability.
+    let knoll_one_x = random_range(&mut random, -48.0, 48.0);
+    let knoll_one_z = random_range(&mut random, -48.0, 48.0);
+    let knoll_two_x = random_range(&mut random, -48.0, 48.0);
+    let knoll_two_z = random_range(&mut random, -48.0, 48.0);
+    let mountain = smooth_bump(x - mountain_x, z - mountain_z, 22.0, 20.0) * 21.0
+        + smooth_bump(x - second_mountain_x, z - second_mountain_z, 17.0, 15.0)
+            * random_range(&mut random, 8.0, 15.0)
+        // A smaller third peak makes some seeds feel properly mountainous without turning every
+        // battlefield into an impassable wall.
+        + smooth_bump(x - third_mountain_x, z - third_mountain_z, 12.0, 11.0)
+            * random_range(&mut random, 0.0, 9.0);
     let rotated_x = (x - ridge_x) * ridge_angle.cos() + (z - ridge_z) * ridge_angle.sin();
     let rotated_z = -(x - ridge_x) * ridge_angle.sin() + (z - ridge_z) * ridge_angle.cos();
     let ridge = smooth_bump(rotated_x, rotated_z, 42.0, 7.0) * 7.0;
     let bowl = smooth_bump(x - bowl_x, z - bowl_z, 25.0, 22.0) * -12.0;
+    let knolls = smooth_bump(x - knoll_one_x, z - knoll_one_z, 11.0, 9.0)
+        * random_range(&mut random, 1.5, 3.5)
+        + smooth_bump(x - knoll_two_x, z - knoll_two_z, 14.0, 12.0)
+            * random_range(&mut random, -3.0, 2.5);
     let local = (x * random_range(&mut random, 0.08, 0.13)).sin()
         * (z * random_range(&mut random, 0.07, 0.12)).cos()
         * 1.2
-        + ((x + z) * random_range(&mut random, 0.04, 0.08)).sin() * 0.8;
-    6.0 + mountain + ridge + bowl + local
+        + ((x + z) * random_range(&mut random, 0.04, 0.08)).sin() * 0.8
+        + (x * random_range(&mut random, 0.16, 0.24) + z * random_range(&mut random, 0.12, 0.20))
+            .sin()
+            * 0.35;
+    6.0 + mountain + ridge + bowl + knolls + local
 }
 
 fn authored_fixture_height(x: f32, z: f32) -> f32 {
