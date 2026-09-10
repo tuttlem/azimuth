@@ -1,4 +1,4 @@
-use crate::world::WorldPosition;
+use crate::world::{WorldPosition, WorldVector};
 
 /// One large default battlefield. At maximum 45-degree power, ordinary shells can still cross
 /// most of this width; a larger map would make normal artillery engagement needlessly rare.
@@ -185,6 +185,21 @@ impl BattlefieldTerrain {
 
     pub fn height_if_within_bounds(&self, x: f32, z: f32) -> Option<f32> {
         is_within_bounds(x, z).then(|| self.height(x, z))
+    }
+
+    /// Deterministic central-difference downhill direction on the current authoritative surface.
+    /// `y` is zero because Roller only needs horizontal terrain guidance.
+    pub fn downhill_direction_if_within_bounds(&self, x: f32, z: f32) -> Option<WorldVector> {
+        const SAMPLE: f32 = 0.75;
+        let west = self.height_if_within_bounds(x - SAMPLE, z)?;
+        let east = self.height_if_within_bounds(x + SAMPLE, z)?;
+        let north = self.height_if_within_bounds(x, z - SAMPLE)?;
+        let south = self.height_if_within_bounds(x, z + SAMPLE)?;
+        Some(WorldVector {
+            x: west - east,
+            y: 0.0,
+            z: north - south,
+        })
     }
 
     /// Returns the absolute current-surface elevation change between two in-bounds horizontal

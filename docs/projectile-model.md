@@ -90,8 +90,9 @@ wraps from 0 through less than 360 degrees; elevation clamps to 5–85 degrees; 
 clamps to 8–30 units per second.
 
 Each player selects a weapon only during a choosing turn: `1` selects unlimited Basic
-Shell, `2` selects High Explosive when a round remains, `3` selects Heavy Shell when a round
-remains, and `4` selects MIRV when a round remains. Press Space commits that weapon and fires the current player's
+Shell, `2` selects High Explosive, `3` selects Heavy Shell, `4` selects MIRV, `5` selects Cluster
+Bomb, `6` selects Bomb Net, `7` selects Roller, and `8` selects Bunker Buster when a round
+remains. Press Space commits that weapon and fires the current player's
 current barrel-end firing origin. Basic Shell uses the established 6-unit / 40-damage blast and
 4-unit / 1.8-depth crater. High Explosive has two rounds per player and uses the same flight but an
 8-unit / 60-damage blast and 6-unit / 3-depth crater. Heavy Shell has two rounds per player, the
@@ -110,6 +111,21 @@ to the first fixed step with non-positive vertical velocity—replaces it with f
 children. Each child inherits carrier state plus a small fixed horizontal separation, uses the same
 gravity/wind/swept terrain test, and can impact or leave bounds independently. The firing turn does
 not complete until every child is gone and any tank settling caused by the barrage is complete.
+
+Cluster Bomb has two rounds and deploys ten small wind-affected bomblets during descent into a
+compact ordered barrage. Bomb Net has one round and deploys a readable 4×4 two-axis pattern with
+much wider spacing and lower individual blast power. Both remain one committed shot: a carrier is
+replaced once, children use the ordinary fixed-step projectile/collision path, and the turn waits
+for every child and consequent settling.
+
+Roller has two rounds. Its ordinary ballistic carrier changes only on first terrain contact: it
+retains horizontal landing momentum, samples the current authoritative terrain's downhill direction
+each fixed step, stays surface-attached, and detonates after a fixed bounded rolling budget or
+near-stop. Bunker Buster also has two rounds. It converts first contact into a short, bounded
+displacement along its impact direction, then resolves one normal damage/deformation blast from
+inside the terrain. Its crater is deliberately narrower and deeper than HE. Neither behaviour
+creates a rigid-body or underground physics subsystem; both remain deterministic committed-shot
+states that must resolve before turn handoff.
 
 The default gravity magnitude is 8 abstract units per second squared. At match start, wind is
 sampled once with a random horizontal direction and a gentle strength from 0.75 through 1.75

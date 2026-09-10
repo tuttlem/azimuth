@@ -37,7 +37,10 @@ use tank::{
     TankFiringRepresentation, initial_tanks_for_players_seeded,
 };
 use turn::{MatchState, TurnPhase, TurnState};
-use weapon::{FiredShot, PlayerWeaponLoadouts, WeaponAvailability, WeaponId, weapon_definition};
+use weapon::{
+    BOMB_NET_CHILD_COUNT, CLUSTER_BOMB_CHILD_COUNT, ContactState, FiredShot, MIRV_CHILD_COUNT,
+    PlayerWeaponLoadouts, WeaponAvailability, WeaponId, weapon_definition,
+};
 use world::{WorldPosition, WorldVector};
 
 const CAMERA_MIN_DISTANCE: f32 = 8.0;
@@ -257,25 +260,21 @@ struct ProjectileVisualAssets {
     heavy_material: Handle<StandardMaterial>,
     mirv_carrier_material: Handle<StandardMaterial>,
     mirv_child_material: Handle<StandardMaterial>,
+    cluster_material: Handle<StandardMaterial>,
+    net_material: Handle<StandardMaterial>,
+    roller_material: Handle<StandardMaterial>,
+    bunker_material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource)]
 struct AudioAssets {
     fire: Handle<AudioSource>,
-    flight: Handle<AudioSource>,
     impact: Handle<AudioSource>,
-    wind: Handle<AudioSource>,
     turret_dink: Handle<AudioSource>,
 }
 
 #[derive(Resource, Default)]
 struct TurretDinkCooldown(f32);
-
-#[derive(Component)]
-struct FlightAudio;
-
-#[derive(Component)]
-struct WindAudio;
 
 #[derive(Resource)]
 struct ImpactMarkerAssets {
@@ -563,9 +562,7 @@ fn spawn_battlefield_scene(
     ));
     commands.insert_resource(AudioAssets {
         fire: asset_server.load("audio/fire.ogg"),
-        flight: asset_server.load("audio/flight.ogg"),
         impact: asset_server.load("audio/impact.ogg"),
-        wind: asset_server.load("audio/wind.ogg"),
         turret_dink: asset_server.load("audio/turret-dink.ogg"),
     });
     spawn_wind_indicator_overlay(&mut commands, &mut meshes, &mut materials);
@@ -660,6 +657,10 @@ fn spawn_battlefield_scene(
         heavy_material: materials.add(Color::srgb(0.20, 0.22, 0.24)),
         mirv_carrier_material: materials.add(Color::srgb(0.65, 0.08, 0.08)),
         mirv_child_material: materials.add(Color::srgb(0.18, 0.02, 0.02)),
+        cluster_material: materials.add(Color::srgb(1.0, 0.42, 0.02)),
+        net_material: materials.add(Color::srgb(0.52, 0.08, 0.72)),
+        roller_material: materials.add(Color::srgb(0.16, 0.30, 0.12)),
+        bunker_material: materials.add(Color::srgb(0.08, 0.09, 0.11)),
     });
     commands.insert_resource(ImpactMarkerAssets {
         mesh: meshes.add(Sphere::new(0.18)),
@@ -1100,7 +1101,7 @@ fn fire_current_player(
         Name::new("Aimed projectile"),
         ProjectileVisual,
         Mesh3d(assets.mesh.clone()),
-        MeshMaterial3d(projectile_material(&assets, definition.id)),
+        MeshMaterial3d(projectile_material(assets, definition.id)),
         Transform::from_translation(to_bevy_position(shot.projectile.position)),
     ));
     // Successful shared launch is the sole physical fire boundary for Human and AI turns.
@@ -1137,6 +1138,10 @@ fn projectile_material(
         WeaponId::HighExplosive => assets.high_explosive_material.clone(),
         WeaponId::HeavyShell => assets.heavy_material.clone(),
         WeaponId::Mirv => assets.mirv_carrier_material.clone(),
+        WeaponId::ClusterBomb => assets.cluster_material.clone(),
+        WeaponId::BombNet => assets.net_material.clone(),
+        WeaponId::Roller => assets.roller_material.clone(),
+        WeaponId::BunkerBuster => assets.bunker_material.clone(),
         #[cfg(test)]
         WeaponId::TestConventional => assets.basic_material.clone(),
     }
@@ -1334,6 +1339,14 @@ fn select_weapon_input(
         Some(WeaponId::HeavyShell)
     } else if keyboard.just_pressed(KeyCode::Digit4) {
         Some(WeaponId::Mirv)
+    } else if keyboard.just_pressed(KeyCode::Digit5) {
+        Some(WeaponId::ClusterBomb)
+    } else if keyboard.just_pressed(KeyCode::Digit6) {
+        Some(WeaponId::BombNet)
+    } else if keyboard.just_pressed(KeyCode::Digit7) {
+        Some(WeaponId::Roller)
+    } else if keyboard.just_pressed(KeyCode::Digit8) {
+        Some(WeaponId::BunkerBuster)
     } else {
         None
     };
@@ -2169,7 +2182,7 @@ fn hud_field_text(field: HudTextField, view: &TacticalHudView) -> String {
         }),
         HudTextField::Controls => match view.action {
             HudAction::Choose => {
-                "1 BASIC | 2 HE | 3 HEAVY | M MOVE | SPACE FIRE\nARROWS AIM | -/= POWER".into()
+                "1 BASIC | 2 HE | 3 HEAVY | 4 MIRV | 5 CLUSTER | 6 NET | 7 ROLLER | 8 BUNKER\nM MOVE | SPACE FIRE | ARROWS AIM | -/= POWER".into()
             }
             HudAction::Moving => "ARROWS MOVE (CAMERA) | ENTER END".into(),
             HudAction::Resolving | HudAction::Finished => String::new(),
@@ -2269,6 +2282,90 @@ fn advance_projectile(
         return;
     };
 
+    match shot.contact {
+        ContactState::Rolling { remaining_steps } => {
+            let downhill = terrain
+                .0
+                .downhill_direction_if_within_bounds(
+                    shot.projectile.position.x,
+                    shot.projectile.position.z,
+                )
+                .unwrap_or(WorldVector::ZERO);
+            shot.projectile.velocity = shot
+                .projectile
+                .velocity
+                .scaled(0.992)
+                .added(downhill.scaled(0.035));
+            let next = shot.projectile.position.translated(WorldVector {
+                x: shot.projectile.velocity.x * crate::projectile::FIXED_STEP_SECONDS,
+                y: 0.0,
+                z: shot.projectile.velocity.z * crate::projectile::FIXED_STEP_SECONDS,
+            });
+            if let Some(height) = terrain.0.height_if_within_bounds(next.x, next.z) {
+                shot.projectile.position = WorldPosition {
+                    x: next.x,
+                    y: height + 0.18,
+                    z: next.z,
+                };
+            } else {
+                shot.contact = ContactState::Rolling { remaining_steps: 0 };
+            }
+            let speed =
+                (shot.projectile.velocity.x.powi(2) + shot.projectile.velocity.z.powi(2)).sqrt();
+            if remaining_steps <= 1 || speed < 0.35 {
+                let impact = TerrainImpact {
+                    position: WorldPosition {
+                        y: terrain
+                            .0
+                            .height(shot.projectile.position.x, shot.projectile.position.z),
+                        ..shot.projectile.position
+                    },
+                };
+                flight.0 = resolve_projectile_advance(
+                    shot,
+                    ProjectileAdvance::TerrainImpact(impact),
+                    &mut terrain.0,
+                    &mut tanks.0,
+                    &mut latest_impact,
+                    &mut turn.0,
+                );
+            } else {
+                shot.contact = ContactState::Rolling {
+                    remaining_steps: remaining_steps - 1,
+                };
+                flight.0 = Some(shot);
+            }
+            return;
+        }
+        ContactState::Penetrating {
+            remaining_steps,
+            direction,
+        } => {
+            shot.projectile.position = shot.projectile.position.translated(direction.scaled(0.18));
+            if remaining_steps <= 1 {
+                let impact = TerrainImpact {
+                    position: shot.projectile.position,
+                };
+                flight.0 = resolve_projectile_advance(
+                    shot,
+                    ProjectileAdvance::TerrainImpact(impact),
+                    &mut terrain.0,
+                    &mut tanks.0,
+                    &mut latest_impact,
+                    &mut turn.0,
+                );
+            } else {
+                shot.contact = ContactState::Penetrating {
+                    remaining_steps: remaining_steps - 1,
+                    direction,
+                };
+                flight.0 = Some(shot);
+            }
+            return;
+        }
+        ContactState::Airborne => {}
+    }
+
     if shot.split {
         for index in 0..shot.children.len() {
             let Some(mut child) = shot.children[index] else {
@@ -2315,7 +2412,7 @@ fn advance_projectile(
         SimulationLimits::BATTLEFIELD,
         |x, z| terrain.0.height_if_within_bounds(x, z),
     );
-    if shot.is_mirv_carrier()
+    if shot.is_deployment_carrier()
         && matches!(advance, ProjectileAdvance::Active)
         && shot.projectile.velocity.y <= 0.0
     {
@@ -2333,26 +2430,80 @@ fn advance_projectile(
             y: 0.0,
             z: forward.x / length,
         };
-        let offsets = [-2.0, -1.0, 0.0, 1.0, 2.0];
-        for (index, lateral) in offsets.into_iter().enumerate() {
+        let child_count = match shot.weapon {
+            WeaponId::Mirv => MIRV_CHILD_COUNT,
+            WeaponId::ClusterBomb => CLUSTER_BOMB_CHILD_COUNT,
+            WeaponId::BombNet => BOMB_NET_CHILD_COUNT,
+            _ => unreachable!("only deployment carriers reach this branch"),
+        };
+        for index in 0..child_count {
             let mut child = carrier;
+            let (lateral, forward_offset) = match shot.weapon {
+                WeaponId::Mirv => (index as f32 - 2.0, (index as f32 - 2.0) * 0.08),
+                WeaponId::ClusterBomb => {
+                    let ring = index as f32 - 4.5;
+                    (ring * 0.42, ((index % 3) as f32 - 1.0) * 0.24)
+                }
+                WeaponId::BombNet => {
+                    let row = index / 4;
+                    let column = index % 4;
+                    ((column as f32 - 1.5) * 2.4, (row as f32 - 1.5) * 1.15)
+                }
+                _ => unreachable!(),
+            };
             child.velocity = child
                 .velocity
-                .added(right.scaled(lateral * 0.8))
-                .added(forward.scaled((index as f32 - 2.0) * 0.08));
+                .added(right.scaled(
+                    lateral
+                        * if shot.weapon == WeaponId::BombNet {
+                            0.72
+                        } else {
+                            0.8
+                        },
+                ))
+                .added(forward.scaled(forward_offset));
             shot.children[index] = Some(child);
         }
         shot.split = true;
         flight.0 = Some(shot);
     } else {
-        flight.0 = resolve_projectile_advance(
-            shot,
-            advance,
-            &mut terrain.0,
-            &mut tanks.0,
-            &mut latest_impact,
-            &mut turn.0,
-        );
+        match (shot.weapon, advance) {
+            (WeaponId::Roller, ProjectileAdvance::TerrainImpact(impact)) => {
+                shot.projectile.position = impact.position;
+                shot.projectile.velocity.y = 0.0;
+                shot.contact = ContactState::Rolling {
+                    remaining_steps: 720,
+                };
+                flight.0 = Some(shot);
+            }
+            (WeaponId::BunkerBuster, ProjectileAdvance::TerrainImpact(impact)) => {
+                let velocity = shot.projectile.velocity;
+                let length =
+                    (velocity.x * velocity.x + velocity.y * velocity.y + velocity.z * velocity.z)
+                        .sqrt()
+                        .max(0.001);
+                shot.projectile.position = impact.position;
+                shot.contact = ContactState::Penetrating {
+                    remaining_steps: 14,
+                    direction: WorldVector {
+                        x: velocity.x / length,
+                        y: velocity.y.min(-0.25) / length,
+                        z: velocity.z / length,
+                    },
+                };
+                flight.0 = Some(shot);
+            }
+            (_, advance) => {
+                flight.0 = resolve_projectile_advance(
+                    shot,
+                    advance,
+                    &mut terrain.0,
+                    &mut tanks.0,
+                    &mut latest_impact,
+                    &mut turn.0,
+                )
+            }
+        }
     }
 }
 
@@ -2476,18 +2627,24 @@ fn sync_projectile_visual(
             vec![shot.projectile.position]
         };
         let mut existing = visuals.iter_mut();
+        let child_material = match shot.weapon {
+            WeaponId::Mirv => assets.mirv_child_material.clone(),
+            WeaponId::ClusterBomb => assets.cluster_material.clone(),
+            WeaponId::BombNet => assets.net_material.clone(),
+            _ => assets.basic_material.clone(),
+        };
         for position in &positions {
             if let Some((_, mut transform, mut material)) = existing.next() {
                 transform.translation = to_bevy_position(*position);
                 if shot.split {
-                    material.0 = assets.mirv_child_material.clone();
+                    material.0 = child_material.clone();
                 }
             } else {
                 commands.spawn((
-                    Name::new("MIRV child projectile"),
+                    Name::new("Barrage child projectile"),
                     ProjectileVisual,
                     Mesh3d(assets.mesh.clone()),
-                    MeshMaterial3d(assets.mirv_child_material.clone()),
+                    MeshMaterial3d(child_material.clone()),
                     Transform::from_translation(to_bevy_position(*position)),
                 ));
             }
@@ -3417,7 +3574,7 @@ mod tests {
         );
         assert_eq!(
             hud_field_text(HudTextField::Controls, &view),
-            "1 BASIC | 2 HE | 3 HEAVY | M MOVE | SPACE FIRE\nARROWS AIM | -/= POWER"
+            "1 BASIC | 2 HE | 3 HEAVY | 4 MIRV | 5 CLUSTER | 6 NET | 7 ROLLER | 8 BUNKER\nM MOVE | SPACE FIRE | ARROWS AIM | -/= POWER"
         );
 
         assert!(

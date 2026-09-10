@@ -555,25 +555,25 @@ wind-resistance is visible and useful without making it wind-immune.
 ## Cluster / Multi-Projectile Weapons
 
 * [x] MIRV-style projectile.
-* [ ] Cluster bomb.
+* [x] Cluster bomb.
 * [ ] Configurable split altitude or split timing if gameplay supports it.
 * [x] Independent child-projectile trajectories.
 * [x] Wind interaction for child projectiles.
-* [ ] Bomb Net: deploy a broad, readable horizontal grid or net of small explosives.
+* [x] Bomb Net: deploy a broad, readable horizontal grid or net of small explosives.
 * [ ] Death Sphere: an unusual looping or figure-eight carrier that periodically drops small explosives.
 
 ## Terrain Weapons
 
 * [ ] Crater-focused weapon.
-* [ ] Deep/narrow penetrator.
+* [x] Deep/narrow penetrator.
 * [ ] Terrain-building dirt bomb.
 * [ ] Terrain-flattening weapon.
 * [ ] Ridge/wall-forming weapon if fun.
 
 ## Terrain-Following Weapons
 
-* [ ] Rolling bomb.
-* [ ] Projectile affected by terrain slope after landing.
+* [x] Rolling bomb.
+* [x] Projectile affected by terrain slope after landing.
 * [ ] Bouncing projectile.
 * [ ] Experimental tunnelling weapon if feasible.
 * [ ] Expanded rolling and terrain-following weapons that turn slopes and valleys into the weapon's path.
@@ -1152,11 +1152,11 @@ These are conceptual milestones rather than fixed specification sequences.
 
 ## Milestone G — Arsenal
 
-* [ ] Several distinct weapons exist.
-* [ ] At least one cluster/MIRV weapon exists.
-* [ ] At least one terrain-manipulation weapon exists.
+* [x] Several distinct weapons exist.
+* [x] At least one cluster/MIRV weapon exists.
+* [x] At least one terrain-manipulation weapon exists.
 * [ ] At least one ridiculous weapon exists.
-* [ ] Weapon selection creates meaningful tactical choices.
+* [x] Weapon selection creates meaningful tactical choices.
 
 ## Milestone H — Complete Match Experience
 
