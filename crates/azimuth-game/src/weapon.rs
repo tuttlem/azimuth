@@ -40,6 +40,27 @@ pub enum WeaponId {
     TestConventional,
 }
 
+/// Prices deliberately live beside the weapon catalogue: the shop is ammunition-only, and the
+/// unlimited Basic Shell must never become a finite purchase.
+pub const fn weapon_price(id: WeaponId) -> Option<u32> {
+    match id {
+        WeaponId::BasicShell => None,
+        WeaponId::HighExplosive => Some(300),
+        WeaponId::HeavyShell => Some(250),
+        WeaponId::Mirv => Some(600),
+        WeaponId::ClusterBomb => Some(550),
+        WeaponId::BombNet => Some(650),
+        WeaponId::Roller => Some(400),
+        WeaponId::BunkerBuster => Some(450),
+        WeaponId::DirtBomb => Some(350),
+        WeaponId::CurveBall => Some(400),
+        WeaponId::Bouncer => Some(350),
+        WeaponId::Nuke => Some(1500),
+        #[cfg(test)]
+        WeaponId::TestConventional => None,
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AmmunitionRule {
     Unlimited,
@@ -352,6 +373,30 @@ impl Default for PlayerWeaponLoadout {
 }
 
 impl PlayerWeaponLoadout {
+    pub fn add_round(&mut self, weapon: WeaponId) -> bool {
+        let availability = match weapon {
+            WeaponId::BasicShell => return false,
+            WeaponId::HighExplosive => &mut self.high_explosive,
+            WeaponId::HeavyShell => &mut self.heavy_shell,
+            WeaponId::Mirv => &mut self.mirv,
+            WeaponId::ClusterBomb => &mut self.cluster_bomb,
+            WeaponId::BombNet => &mut self.bomb_net,
+            WeaponId::Roller => &mut self.roller,
+            WeaponId::BunkerBuster => &mut self.bunker_buster,
+            WeaponId::DirtBomb => &mut self.dirt_bomb,
+            WeaponId::CurveBall => &mut self.curve_ball,
+            WeaponId::Bouncer => &mut self.bouncer,
+            WeaponId::Nuke => &mut self.nuke,
+            #[cfg(test)]
+            WeaponId::TestConventional => return false,
+        };
+        if let WeaponAvailability::Remaining(rounds) = availability {
+            *rounds = rounds.saturating_add(1);
+            true
+        } else {
+            false
+        }
+    }
     pub fn selected(self) -> WeaponId {
         self.selected
     }

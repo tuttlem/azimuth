@@ -4,6 +4,8 @@ mod battlefield;
 mod combat;
 mod match_setup;
 mod projectile;
+#[allow(dead_code)]
+mod session;
 mod tank;
 mod turn;
 mod weapon;
@@ -32,6 +34,7 @@ use projectile::{
     Gravity, Projectile, ProjectileAdvance, SimulationLimits, TerrainImpact, Wind,
     azimuth_from_horizontal_direction,
 };
+use session::GameSession;
 use tank::{
     HorizontalDirection, MAX_HEALTH, MovementDirection, MovementRejection, PlayerId, Tank,
     TankFiringRepresentation, initial_tanks_for_players_seeded,
@@ -559,6 +562,7 @@ fn main() {
         .insert_resource(CameraAimReset::default())
         .insert_resource(MatchSetupGate::default())
         .insert_resource(PendingMatchConfiguration(configuration))
+        .insert_resource(GameSession::new(MatchConfiguration::default().players))
         .insert_resource(AimRepeatState::default())
         .insert_resource(TurretDinkCooldown::default())
         .insert_resource(BattlefieldGravity(
@@ -1364,11 +1368,15 @@ fn update_shot_presentation(
                 ShotPresentationPhase::PlayerView
             } else {
                 ShotPresentationPhase::Result {
-                    position: WorldPosition {
-                        x: 0.0,
-                        y: 0.0,
-                        z: 0.0,
-                    },
+                    position: result_focus_position(
+                        &tanks.0,
+                        turn.0.match_state,
+                        WorldPosition {
+                            x: 0.0,
+                            y: 0.0,
+                            z: 0.0,
+                        },
+                    ),
                 }
             };
         }
@@ -1385,7 +1393,9 @@ fn update_shot_presentation(
                 presentation.phase = if turn.0.match_state == MatchState::InProgress {
                     ShotPresentationPhase::PlayerView
                 } else {
-                    ShotPresentationPhase::Result { position }
+                    ShotPresentationPhase::Result {
+                        position: result_focus_position(&tanks.0, turn.0.match_state, position),
+                    }
                 };
             } else {
                 presentation.phase = ShotPresentationPhase::Impact {
@@ -1396,6 +1406,22 @@ fn update_shot_presentation(
         }
         (ShotPresentationPhase::Result { .. }, _) => {}
         (_, Some(_)) => {}
+    }
+}
+
+/// A result celebrates the survivor, not the location that happened to receive the final blast.
+/// Draws retain the final impact framing because there is no winning tank to focus.
+fn result_focus_position(
+    tanks: &[Tank],
+    state: MatchState,
+    fallback: WorldPosition,
+) -> WorldPosition {
+    match state {
+        MatchState::Winner(winner) => tanks
+            .iter()
+            .find(|tank| tank.owner == winner)
+            .map_or(fallback, |tank| tank.pose.position),
+        MatchState::InProgress | MatchState::Draw => fallback,
     }
 }
 
@@ -2622,6 +2648,21 @@ fn advance_projectile(
             } else {
                 shot.contact = ContactState::Rolling { remaining_steps: 0 };
             }
+            // A Roller is a ground-hugging weapon: reaching an opponent is an impact, not a
+            // cosmetic near-miss. The resolving turn still identifies its firing owner.
+            if let Some(target) =
+                rolling_enemy_contact(shot.projectile.position, turn.0.current_player, &tanks.0)
+            {
+                flight.0 = resolve_projectile_advance(
+                    shot,
+                    ProjectileAdvance::TerrainImpact(TerrainImpact { position: target }),
+                    &mut terrain.0,
+                    &mut tanks.0,
+                    &mut latest_impact,
+                    &mut turn.0,
+                );
+                return;
+            }
             let speed =
                 (shot.projectile.velocity.x.powi(2) + shot.projectile.velocity.z.powi(2)).sqrt();
             if remaining_steps <= 1 || speed < 0.35 {
@@ -2980,6 +3021,23 @@ fn complete_resolution_if_settled(tanks: &[Tank], turn: &mut TurnState) {
 
 fn survivors(tanks: &[Tank]) -> Vec<bool> {
     tanks.iter().map(|tank| !tank.is_eliminated()).collect()
+}
+
+fn rolling_enemy_contact(
+    position: WorldPosition,
+    owner: PlayerId,
+    tanks: &[Tank],
+) -> Option<WorldPosition> {
+    const ROLLER_HIT_RADIUS: f32 = 1.35;
+    tanks
+        .iter()
+        .find(|tank| {
+            tank.owner != owner
+                && !tank.is_eliminated()
+                && (tank.pose.position.x - position.x).hypot(tank.pose.position.z - position.z)
+                    <= ROLLER_HIT_RADIUS
+        })
+        .map(|tank| tank.pose.position)
 }
 
 fn sync_battlefield_mesh(
