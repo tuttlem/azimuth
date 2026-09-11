@@ -34,7 +34,7 @@ use projectile::{
     Gravity, Projectile, ProjectileAdvance, SimulationLimits, TerrainImpact, Wind,
     azimuth_from_horizontal_direction,
 };
-use session::GameSession;
+use session::{GameSession, SessionPhase};
 use tank::{
     HorizontalDirection, MAX_HEALTH, MovementDirection, MovementRejection, PlayerId, Tank,
     TankFiringRepresentation, initial_tanks_for_players_seeded,
@@ -393,6 +393,12 @@ struct TankMuzzle(PlayerId);
 struct TacticalHud;
 
 #[derive(Component)]
+struct SessionFlowOverlay;
+
+#[derive(Component)]
+struct SessionFlowText;
+
+#[derive(Component)]
 struct ImpactFlashOverlay;
 
 #[derive(Component)]
@@ -511,6 +517,9 @@ type MatchSetupWorldResources<'w> = (
     ResMut<'w, WorldDressing>,
     ResMut<'w, BattlefieldWind>,
     ResMut<'w, AiDecisionSeed>,
+    ResMut<'w, GameSession>,
+    ResMut<'w, ShotPresentation>,
+    ResMut<'w, CameraAimReset>,
 );
 
 impl Default for BattlefieldCamera {
@@ -570,7 +579,14 @@ fn main() {
         ))
         .insert_resource(BattlefieldWind(wind))
         .insert_resource(Time::<Fixed>::from_hz(PROJECTILE_FIXED_HZ))
-        .add_systems(Startup, (spawn_battlefield_scene, spawn_match_setup))
+        .add_systems(
+            Startup,
+            (
+                spawn_battlefield_scene,
+                spawn_match_setup,
+                spawn_session_flow_overlay,
+            ),
+        )
         .add_systems(
             Update,
             (
@@ -607,6 +623,7 @@ fn main() {
             )
                 .chain(),
         )
+        .add_systems(Update, (update_session_flow, sync_session_flow_overlay))
         .add_systems(
             FixedUpdate,
             (advance_projectile, advance_tank_settling).chain(),
@@ -927,6 +944,86 @@ fn spawn_match_setup(mut commands: Commands) {
         });
 }
 
+fn spawn_session_flow_overlay(mut commands: Commands) {
+    commands
+        .spawn((
+            SessionFlowOverlay,
+            Visibility::Hidden,
+            Node {
+                width: percent(100.0),
+                height: percent(100.0),
+                position_type: PositionType::Absolute,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.02, 0.03, 0.06, 0.80)),
+            GlobalZIndex(200),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                SessionFlowText,
+                Text::new(""),
+                TextFont {
+                    font_size: 28.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.82, 0.24)),
+            ));
+        });
+}
+
+fn sync_session_flow_overlay(
+    session: Res<GameSession>,
+    mut overlays: Query<&mut Visibility, With<SessionFlowOverlay>>,
+    mut texts: Query<&mut Text, With<SessionFlowText>>,
+) {
+    let message = match session.phase {
+        SessionPhase::Playing | SessionPhase::Setup | SessionPhase::Transition => None,
+        SessionPhase::Celebrating => Some("ROUND COMPLETE!\nPRESS ENTER FOR ACCOUNTING".to_owned()),
+        SessionPhase::Accounting => Some(format!(
+            "ROUND ACCOUNTING\n{}\nPRESS ENTER FOR WEAPON SHOP",
+            session
+                .players
+                .iter()
+                .map(|p| format!(
+                    "{}  +${}  CASH ${}",
+                    p.configuration.display_name,
+                    session
+                        .earnings
+                        .iter()
+                        .find(|(id, _)| *id == p.configuration.id)
+                        .map_or(0, |(_, e)| e.total()),
+                    p.cash
+                ))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )),
+        SessionPhase::Shopping => Some(format!(
+            "WEAPON SHOP\nROUND {}\nShop purchasing UI is next; press ENTER to start the next round.\n{}",
+            session.round_number + 1,
+            session
+                .players
+                .iter()
+                .map(|p| format!("{}  ${}", p.configuration.display_name, p.cash))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )),
+    };
+    for mut visibility in &mut overlays {
+        *visibility = if message.is_some() {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    if let Some(message) = message {
+        for mut text in &mut texts {
+            text.0 = message.clone();
+        }
+    }
+}
+
 fn setup_text(parent: &mut ChildSpawnerCommands, value: &str, font_size: f32, color: Color) {
     parent.spawn((
         Text::new(value),
@@ -957,9 +1054,19 @@ fn update_match_setup(
     mut commands: Commands,
     mut details: Query<&mut Text, With<MatchSetupDetails>>,
 ) {
-    let (mut terrain, match_seed, mut dressing, mut wind, mut ai_seed) = world;
+    let (
+        mut terrain,
+        match_seed,
+        mut dressing,
+        mut wind,
+        mut ai_seed,
+        mut session,
+        mut shot_presentation,
+        mut camera_aim_reset,
+    ) = world;
     let (mut meshes, dressing_assets) = dressing_render;
-    if gate.started {
+    let transition_start = gate.started && session.phase == SessionPhase::Transition;
+    if gate.started && !transition_start {
         return;
     }
     let requested_count = [
@@ -1049,7 +1156,9 @@ fn update_match_setup(
     if keyboard.just_pressed(KeyCode::Enter) {
         configuration.0.trim_human_names();
     }
-    if keyboard.just_pressed(KeyCode::Enter) && configuration.0.validate().is_ok() {
+    if (keyboard.just_pressed(KeyCode::Enter) || transition_start)
+        && configuration.0.validate().is_ok()
+    {
         let ids = configuration
             .0
             .players
@@ -1063,7 +1172,24 @@ fn update_match_setup(
         dressing.0 = generated_dressing;
         wind.0 = generated_wind;
         turn.0 = initial_turn_state(&tanks.0);
-        weapons.0 = PlayerWeaponLoadouts::new(&ids);
+        // A new round must not inherit the old impact/result camera. PlayerView lets the normal
+        // active-turret camera own the next turn immediately.
+        *shot_presentation = ShotPresentation::default();
+        camera_aim_reset.0 = true;
+        if transition_start {
+            weapons.0 = PlayerWeaponLoadouts(
+                session
+                    .players
+                    .iter()
+                    .map(|player| (player.configuration.id, player.loadout))
+                    .collect(),
+            );
+            session.round_number += 1;
+            session.phase = SessionPhase::Playing;
+        } else {
+            *session = GameSession::new(configuration.0.players.clone());
+            weapons.0 = PlayerWeaponLoadouts::new(&ids);
+        }
         // Gameplay AI gets its own labeled stream; setup names and scenery cannot perturb it.
         ai_seed.0 = derived_seed(match_seed.0, "ai");
         for entity in &tank_visuals {
@@ -1305,6 +1431,33 @@ fn shot_mode_for_player(
 
 fn presentation_allows_new_action(presentation: &ShotPresentation) -> bool {
     !matches!(presentation.phase, ShotPresentationPhase::Impact { .. })
+}
+
+/// The first continuing-loop UI is intentionally keyboard-simple while the existing HUD remains
+/// visible: Enter advances celebration -> accounting -> shop -> a fresh round.  Combat systems
+/// remain blocked because the result turn state is already Finished.
+fn update_session_flow(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    turn: Res<CurrentTurn>,
+    weapons: Res<WeaponState>,
+    mut session: ResMut<GameSession>,
+) {
+    if session.phase == SessionPhase::Playing && turn.0.match_state != MatchState::InProgress {
+        for player in &mut session.players {
+            player.loadout = weapons.0.for_player(player.configuration.id);
+        }
+        session.finalise(turn.0.match_state);
+        return;
+    }
+    if !keyboard.just_pressed(KeyCode::Enter) {
+        return;
+    }
+    session.phase = match session.phase {
+        SessionPhase::Celebrating => SessionPhase::Accounting,
+        SessionPhase::Accounting => SessionPhase::Shopping,
+        SessionPhase::Shopping => SessionPhase::Transition,
+        phase => phase,
+    };
 }
 
 /// This runs before controllers each rendered frame. It observes already-authoritative resources:
