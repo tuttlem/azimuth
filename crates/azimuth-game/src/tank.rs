@@ -303,7 +303,7 @@ pub fn initial_tanks_for_players_seeded(
     terrain: &BattlefieldTerrain,
     players: &[PlayerId],
     mut seed: u64,
-) -> Vec<Tank> {
+) -> Option<Vec<Tank>> {
     assert!(
         (2..=8).contains(&players.len()),
         "matches support two through eight tanks"
@@ -328,7 +328,7 @@ pub fn initial_tanks_for_players_seeded(
     }
     let mut selected = Vec::with_capacity(players.len());
     while selected.len() < players.len() {
-        let Some((best_index, _)) = candidates
+        let (best_index, _) = candidates
             .iter()
             .enumerate()
             .filter(|(_, candidate)| {
@@ -343,28 +343,27 @@ pub fn initial_tanks_for_players_seeded(
                     .fold(HALF_EXTENT, f32::min);
                 (index, spread)
             })
-            .max_by(|left, right| left.1.total_cmp(&right.1))
-        else {
-            panic!("generated battlefield lacks enough dry, gentle, separated tank starts");
-        };
+            .max_by(|left, right| left.1.total_cmp(&right.1))?;
         selected.push(candidates.swap_remove(best_index));
     }
 
-    players
-        .iter()
-        .copied()
-        .zip(selected)
-        .map(|(owner, (x, z))| {
-            let direction = HorizontalDirection::new(-x, -z);
-            Tank::on_terrain(
-                terrain,
-                owner,
-                HorizontalPosition { x, z },
-                direction,
-                direction,
-            )
-        })
-        .collect()
+    Some(
+        players
+            .iter()
+            .copied()
+            .zip(selected)
+            .map(|(owner, (x, z))| {
+                let direction = HorizontalDirection::new(-x, -z);
+                Tank::on_terrain(
+                    terrain,
+                    owner,
+                    HorizontalPosition { x, z },
+                    direction,
+                    direction,
+                )
+            })
+            .collect(),
+    )
 }
 
 fn horizontal_distance(first: (f32, f32), second: &(f32, f32)) -> f32 {
@@ -433,10 +432,10 @@ mod tests {
                 let players = (1..=count)
                     .map(|number| PlayerId(number as u8))
                     .collect::<Vec<_>>();
-                let first = initial_tanks_for_players_seeded(&terrain, &players, 77);
+                let first = initial_tanks_for_players_seeded(&terrain, &players, 77).unwrap();
                 assert_eq!(
                     first,
-                    initial_tanks_for_players_seeded(&terrain, &players, 77)
+                    initial_tanks_for_players_seeded(&terrain, &players, 77).unwrap()
                 );
                 assert_eq!(first.len(), count);
                 for (index, tank) in first.iter().enumerate() {
@@ -455,6 +454,23 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn seeded_starts_report_unsuitable_terrain_without_panicking() {
+        let mut terrain = BattlefieldTerrain::initial();
+        terrain.apply_crater(
+            WorldPosition {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            crate::battlefield::Crater::new(100.0, 100.0).unwrap(),
+        );
+        assert!(
+            initial_tanks_for_players_seeded(&terrain, &[PlayerId::One, PlayerId::Two], 17,)
+                .is_none()
+        );
     }
 
     #[test]

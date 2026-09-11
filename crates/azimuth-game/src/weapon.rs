@@ -373,6 +373,11 @@ impl Default for PlayerWeaponLoadout {
 }
 
 impl PlayerWeaponLoadout {
+    /// A new round keeps purchased ammunition but starts with the universal shell selected.
+    pub fn reset_selection(&mut self) {
+        self.selected = WeaponId::BasicShell;
+    }
+
     pub fn add_round(&mut self, weapon: WeaponId) -> bool {
         let availability = match weapon {
             WeaponId::BasicShell => return false,

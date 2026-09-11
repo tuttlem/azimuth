@@ -132,6 +132,17 @@ impl GameSession {
             false
         }
     }
+
+    /// Earnings explain one completed round; balances, wins, identities, and ammunition belong
+    /// to the continuing session and deliberately remain untouched.
+    pub fn clear_round_earnings(&mut self) {
+        for (_, earnings) in &mut self.earnings {
+            *earnings = RoundEarnings::default();
+        }
+        for player in &mut self.players {
+            player.loadout.reset_selection();
+        }
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -150,5 +161,37 @@ mod tests {
         s.finalise(MatchState::Winner(PlayerId::One));
         s.finalise(MatchState::Winner(PlayerId::One));
         assert_eq!(s.player(PlayerId::One).cash, 500);
+    }
+
+    #[test]
+    fn clearing_round_earnings_keeps_session_resources() {
+        let mut s = GameSession::new(MatchConfiguration::default().players);
+        assert!(
+            s.player_mut(PlayerId::One)
+                .loadout
+                .select(WeaponId::HighExplosive)
+        );
+        s.credit_damage(PlayerId::One, PlayerId::Two, 12, true);
+        s.finalise(MatchState::Winner(PlayerId::One));
+        let player = s.player(PlayerId::One).clone();
+        s.clear_round_earnings();
+        assert_eq!(s.player(PlayerId::One).configuration, player.configuration);
+        assert_eq!(s.player(PlayerId::One).cash, player.cash);
+        assert_eq!(s.player(PlayerId::One).wins, player.wins);
+        assert_eq!(
+            s.player(PlayerId::One)
+                .loadout
+                .availability(WeaponId::HighExplosive),
+            player.loadout.availability(WeaponId::HighExplosive)
+        );
+        assert_eq!(
+            s.player(PlayerId::One).loadout.selected(),
+            WeaponId::BasicShell
+        );
+        assert!(
+            s.earnings
+                .iter()
+                .all(|(_, earnings)| *earnings == RoundEarnings::default())
+        );
     }
 }

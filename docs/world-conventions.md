@@ -12,10 +12,12 @@ They describe Azimuth's game world rather than a rendering API's coordinate nami
   equivalence.
 - **Battlefield bounds**: The default battlefield is 120 units wide on X and 120 units deep on Z,
   centred at the origin. Its horizontal extent is -60 through +60 on both axes.
-- **Generated landscape**: A captured match seed deterministically derives independent terrain,
-  starting-position, dressing, and wind streams. Terrain combines broad mountains/ridges/bowls
+- **Generated landscape**: A local game captures one session root seed. Its one-based round number
+  deterministically derives a fresh round seed, which in turn derives independent terrain,
+  starting-position, dressing, wind, and AI streams. Terrain combines broad mountains/ridges/bowls
   with smaller rolling variation; the current mutable triangle surface remains the authority for
-  rendering, tank support, movement, and projectile intersection.
+  rendering, tank support, movement, and projectile intersection. A bounded deterministic retry
+  rejects terrain candidates that cannot provide valid separated starts for every player.
 - **Water and dressing**: The water table is a flat visual plane at Y=0. Terrain below it remains
   ordinary authoritative terrain. Sparse grey building blocks are also presentation-only: neither
   water nor buildings collide, provide cover, change movement, take damage, or affect projectiles.

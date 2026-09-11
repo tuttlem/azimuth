@@ -513,7 +513,7 @@ type BattlefieldSceneResources<'w> = (
 );
 type MatchSetupWorldResources<'w> = (
     ResMut<'w, BattlefieldState>,
-    Res<'w, MatchSeed>,
+    ResMut<'w, MatchSeed>,
     ResMut<'w, WorldDressing>,
     ResMut<'w, BattlefieldWind>,
     ResMut<'w, AiDecisionSeed>,
@@ -550,7 +550,8 @@ fn main() {
         .map(|player| player.id)
         .collect::<Vec<_>>();
     let match_seed = MatchSeed(BattlefieldSeed(select_match_seed()));
-    let (terrain, tanks, dressing, wind) = generate_match_world(match_seed.0, &player_ids);
+    let (terrain, tanks, dressing, wind) =
+        generate_match_world(round_seed(match_seed.0, 1), &player_ids);
     let turn = initial_turn_state(&tanks);
     App::new()
         .add_plugins(DefaultPlugins)
@@ -1050,13 +1051,24 @@ fn update_match_setup(
     overlays: Query<Entity, With<MatchSetupOverlay>>,
     huds: Query<Entity, With<TacticalHud>>,
     tank_visuals: Query<Entity, With<TankVisual>>,
-    building_visuals: Query<Entity, With<BuildingVisual>>,
+    round_visuals: Query<
+        Entity,
+        Or<(
+            With<BuildingVisual>,
+            With<ProjectileVisual>,
+            With<ImpactMarker>,
+            With<ExplosionVisual>,
+            With<ImpactParticle>,
+            With<SmokePuff>,
+            With<HorizonVisual>,
+        )>,
+    >,
     mut commands: Commands,
     mut details: Query<&mut Text, With<MatchSetupDetails>>,
 ) {
     let (
         mut terrain,
-        match_seed,
+        mut match_seed,
         mut dressing,
         mut wind,
         mut ai_seed,
@@ -1165,8 +1177,15 @@ fn update_match_setup(
             .iter()
             .map(|player| player.id)
             .collect::<Vec<_>>();
+        let next_round = if transition_start {
+            session.round_number + 1
+        } else {
+            match_seed.0 = BattlefieldSeed(select_match_seed());
+            1
+        };
+        let selected_round_seed = round_seed(match_seed.0, next_round);
         let (generated, generated_tanks, generated_dressing, generated_wind) =
-            generate_match_world(match_seed.0, &ids);
+            generate_match_world(selected_round_seed, &ids);
         terrain.0 = generated;
         tanks.0 = generated_tanks;
         dressing.0 = generated_dressing;
@@ -1176,22 +1195,34 @@ fn update_match_setup(
         // active-turret camera own the next turn immediately.
         *shot_presentation = ShotPresentation::default();
         camera_aim_reset.0 = true;
+        commands.insert_resource(ProjectileFlight::default());
+        commands.insert_resource(LatestTerrainImpact::default());
+        commands.insert_resource(CurrentImpactExplosionConsumed::default());
+        commands.insert_resource(ImpactFlash::default());
+        commands.insert_resource(MovementFeedback::default());
+        commands.insert_resource(AimRepeatState::default());
+        commands.insert_resource(TurretDinkCooldown::default());
         if transition_start {
             weapons.0 = PlayerWeaponLoadouts(
                 session
                     .players
                     .iter()
-                    .map(|player| (player.configuration.id, player.loadout))
+                    .map(|player| {
+                        let mut loadout = player.loadout;
+                        loadout.reset_selection();
+                        (player.configuration.id, loadout)
+                    })
                     .collect(),
             );
-            session.round_number += 1;
+            session.round_number = next_round;
+            session.clear_round_earnings();
             session.phase = SessionPhase::Playing;
         } else {
             *session = GameSession::new(configuration.0.players.clone());
             weapons.0 = PlayerWeaponLoadouts::new(&ids);
         }
         // Gameplay AI gets its own labeled stream; setup names and scenery cannot perturb it.
-        ai_seed.0 = derived_seed(match_seed.0, "ai");
+        ai_seed.0 = derived_seed(selected_round_seed, "ai");
         for entity in &tank_visuals {
             commands.entity(entity).despawn();
         }
@@ -1209,9 +1240,17 @@ fn update_match_setup(
                 active_firing_representation(tank, turn.0.aim_for(tank.owner)),
             );
         }
-        for entity in &building_visuals {
+        for entity in &round_visuals {
             commands.entity(entity).despawn();
         }
+        commands.spawn((
+            HorizonVisual,
+            Mesh3d(meshes.add(create_horizon_mesh(&VisualHorizon::from_terrain(
+                &terrain.0,
+                BattlefieldSeed(derived_seed(selected_round_seed, "terrain")),
+            )))),
+            MeshMaterial3d(dressing_assets.material.clone()),
+        ));
         spawn_buildings(
             &mut commands,
             &mut meshes,
@@ -2714,12 +2753,32 @@ fn derived_seed(seed: BattlefieldSeed, label: &str) -> u64 {
     })
 }
 
+/// A session root identifies a local game; the round number selects one reproducible fresh world
+/// without allowing UI, cosmetic, or AI randomness to perturb terrain or player starts.
+fn round_seed(root: BattlefieldSeed, round_number: u32) -> BattlefieldSeed {
+    BattlefieldSeed(
+        derived_seed(root, "round")
+            .wrapping_add((round_number as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15)),
+    )
+}
+
 fn generate_match_world(
     seed: BattlefieldSeed,
     players: &[PlayerId],
 ) -> (BattlefieldTerrain, Vec<Tank>, Vec<BuildingPlacement>, Wind) {
-    let terrain = BattlefieldTerrain::generated(BattlefieldSeed(derived_seed(seed, "terrain")));
-    let tanks = initial_tanks_for_players_seeded(&terrain, players, derived_seed(seed, "starts"));
+    const MAX_GENERATION_ATTEMPTS: u64 = 32;
+    let (seed, terrain, tanks) = (0..MAX_GENERATION_ATTEMPTS)
+        .find_map(|attempt| {
+            let candidate = BattlefieldSeed(
+                seed.0
+                    .wrapping_add(attempt.wrapping_mul(0xd1b5_4a32_d192_ed03)),
+            );
+            let terrain =
+                BattlefieldTerrain::generated(BattlefieldSeed(derived_seed(candidate, "terrain")));
+            initial_tanks_for_players_seeded(&terrain, players, derived_seed(candidate, "starts"))
+                .map(|tanks| (candidate, terrain, tanks))
+        })
+        .expect("bounded generated terrain candidates must support the configured 2-8 players");
     let starts = tanks
         .iter()
         .map(|tank| (tank.pose.position.x, tank.pose.position.z))
@@ -2730,7 +2789,7 @@ fn generate_match_world(
     } else {
         Wind::new(WorldVector::ZERO).expect("calm wind must be valid")
     };
-    eprintln!("Azimuth battlefield seed: {}", seed.0);
+    eprintln!("Azimuth round battlefield seed: {}", seed.0);
     (terrain, tanks, dressing, wind)
 }
 
@@ -4166,6 +4225,52 @@ mod tests {
             .collect::<Vec<_>>();
         let after = generate_match_world(seed, &players);
         assert_eq!(before, after);
+    }
+
+    #[test]
+    fn round_seeds_reproduce_one_round_and_vary_across_consecutive_rounds() {
+        let root = BattlefieldSeed(91);
+        let players = (1..=8).map(PlayerId).collect::<Vec<_>>();
+        let first = generate_match_world(round_seed(root, 1), &players);
+        assert_eq!(first, generate_match_world(round_seed(root, 1), &players));
+
+        let rounds = (1..=5)
+            .map(|round| generate_match_world(round_seed(root, round), &players))
+            .collect::<Vec<_>>();
+        for pair in rounds.windows(2) {
+            assert_ne!(pair[0].0, pair[1].0);
+        }
+    }
+
+    #[test]
+    fn generated_rounds_always_publish_valid_full_health_starts() {
+        for root in 0..100 {
+            for count in 2..=8 {
+                let players = (1..=count).map(PlayerId).collect::<Vec<_>>();
+                let (terrain, tanks, _, _) =
+                    generate_match_world(round_seed(BattlefieldSeed(root), 1), &players);
+                assert_eq!(tanks.len(), count as usize);
+                for (index, tank) in tanks.iter().enumerate() {
+                    assert_eq!(tank.health, MAX_HEALTH);
+                    assert!(crate::battlefield::is_dry_and_gentle(
+                        &terrain,
+                        tank.pose.position.x,
+                        tank.pose.position.z,
+                    ));
+                    assert_eq!(
+                        tank.pose.position.y,
+                        terrain.height(tank.pose.position.x, tank.pose.position.z)
+                    );
+                    for other in &tanks[..index] {
+                        assert!(
+                            (tank.pose.position.x - other.pose.position.x)
+                                .hypot(tank.pose.position.z - other.pose.position.z)
+                                >= crate::tank::MINIMUM_START_SEPARATION
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]

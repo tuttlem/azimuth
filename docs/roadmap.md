@@ -315,6 +315,11 @@ remain open until the required multi-seed visual and multiplayer playthroughs ar
 graphical session. Buildings are deliberately non-authoritative; reconsider authoritative or
 destructible structures only if that presentation boundary proves confusing in play.
 
+Implementation note (2026-09-12): a session root now derives a fresh deterministic world for each
+round, with bounded retry for valid 2–8 player starts and full round-only state cleanup. Automated
+coverage exercises 100 roots across all supported player counts; the visual-playthrough gate above
+remains open.
+
 * [ ] Increase the battlefield beyond the current small development arena while retaining readable
   camera framing, projectile limits, terrain queries, and deterministic simulation.
 * [ ] Establish a useful playable size range for two-player duels before considering larger matches.
