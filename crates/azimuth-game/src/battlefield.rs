@@ -319,7 +319,15 @@ impl BattlefieldTerrain {
     /// Presentation is derived from current terrain height so a crater cannot reveal stale or
     /// uninitialised colour. Water itself is a separate flat presentation plane.
     pub fn mesh_colours(&self) -> Vec<[f32; 4]> {
-        self.heights.iter().copied().map(elevation_colour).collect()
+        self.heights
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, height)| {
+                let (x, z) = vertex_position(index % VERTICES_PER_SIDE, index / VERTICES_PER_SIDE);
+                surface_colour(height, x, z)
+            })
+            .collect()
     }
 
     #[cfg(test)]
@@ -368,6 +376,17 @@ pub fn elevation_colour(height: f32) -> [f32; 4] {
         SNOW
     };
     [colour[0], colour[1], colour[2], 1.0]
+}
+
+/// A tiny deterministic colour wobble gives the low-poly terrain surface character without
+/// becoming terrain data: crater/mound physics still depend only on `heights`.
+fn surface_colour(height: f32, x: f32, z: f32) -> [f32; 4] {
+    let mut colour = elevation_colour(height);
+    let mottle = ((x * 0.37).sin() * (z * 0.29).cos()) * 0.035;
+    for channel in &mut colour[..3] {
+        *channel = (*channel + mottle).clamp(0.0, 1.0);
+    }
+    colour
 }
 
 fn blend(first: [f32; 3], second: [f32; 3], fraction: f32) -> [f32; 3] {
@@ -770,5 +789,20 @@ mod tests {
                 && building.position.y > WATER_TABLE
                 && is_dry_and_gentle(&terrain, building.position.x, building.position.z)
         }));
+    }
+
+    #[test]
+    fn surface_mottle_is_deterministic_and_does_not_change_height_queries() {
+        let terrain = BattlefieldTerrain::generated(BattlefieldSeed(23));
+        let before = terrain.height(3.0, -4.0);
+        assert_eq!(
+            surface_colour(8.0, 3.0, -4.0),
+            surface_colour(8.0, 3.0, -4.0)
+        );
+        assert_ne!(
+            surface_colour(8.0, 3.0, -4.0),
+            surface_colour(8.0, 18.0, 11.0)
+        );
+        assert_eq!(terrain.height(3.0, -4.0), before);
     }
 }

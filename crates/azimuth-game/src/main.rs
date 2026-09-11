@@ -84,6 +84,10 @@ const EXPLOSION_INITIAL_SCALE: f32 = 0.35;
 const EXPLOSION_MAXIMUM_SCALE: f32 = 5.0;
 const IMPACT_FLASH_BASE_DURATION_SECONDS: f32 = 0.22;
 const IMPACT_FLASH_BASE_OPACITY: f32 = 0.52;
+const MAX_ACTIVE_IMPACT_PARTICLES: usize = 128;
+const MAX_ACTIVE_SMOKE_PUFFS: usize = 32;
+const MAX_PENDING_IMPACT_EFFECTS: usize = 64;
+const PARTICLE_GRAVITY: f32 = 7.0;
 
 #[derive(Component)]
 struct BattlefieldCamera {
@@ -205,6 +209,8 @@ struct LatestTerrainImpact {
     impact: Option<TerrainImpact>,
     explosion_visual_scale: f32,
     hit_tank: bool,
+    effect_requests: Vec<ImpactPresentationRequest>,
+    next_effect_serial: u64,
 }
 
 impl Default for LatestTerrainImpact {
@@ -213,6 +219,8 @@ impl Default for LatestTerrainImpact {
             impact: None,
             explosion_visual_scale: 1.0,
             hit_tank: false,
+            effect_requests: Vec::new(),
+            next_effect_serial: 0,
         }
     }
 }
@@ -293,6 +301,22 @@ struct ExplosionVisualAssets {
     material: Handle<StandardMaterial>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ImpactPresentationRequest {
+    position: WorldPosition,
+    scale: f32,
+    serial: u64,
+}
+
+#[derive(Resource)]
+struct ImpactEffectAssets {
+    particle_mesh: Handle<Mesh>,
+    smoke_mesh: Handle<Mesh>,
+    hot_material: Handle<StandardMaterial>,
+    dirt_material: Handle<StandardMaterial>,
+    smoke_material: Handle<StandardMaterial>,
+}
+
 #[derive(Resource)]
 struct WorldDressingAssets {
     material: Handle<StandardMaterial>,
@@ -320,6 +344,31 @@ struct BuildingVisual;
 struct ExplosionVisual {
     elapsed_seconds: f32,
     scale_multiplier: f32,
+}
+
+#[derive(Component)]
+struct ImpactParticle {
+    velocity: Vec3,
+    elapsed_seconds: f32,
+    lifetime_seconds: f32,
+    initial_scale: f32,
+}
+
+#[derive(Component)]
+struct SmokePuff {
+    velocity: Vec3,
+    elapsed_seconds: f32,
+    lifetime_seconds: f32,
+    initial_scale: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TankVisualModel {
+    Classic,
+    Heavy,
+    LowProfile,
+    Compact,
+    Angular,
 }
 
 #[derive(Component)]
@@ -545,6 +594,9 @@ fn main() {
                     sync_terrain_impact_explosion,
                     update_impact_flash,
                     update_explosion_visuals,
+                    spawn_impact_effects,
+                    update_impact_particles,
+                    update_smoke_puffs,
                     sync_battlefield_mesh,
                 )
                     .chain(),
@@ -589,7 +641,11 @@ fn spawn_battlefield_scene(
     commands.spawn((
         BattlefieldVisual,
         Mesh3d(meshes.add(create_battlefield_mesh(&terrain.0))),
-        MeshMaterial3d(materials.add(Color::WHITE)),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 0.88,
+            ..default()
+        })),
     ));
 
     commands.spawn((
@@ -614,7 +670,12 @@ fn spawn_battlefield_scene(
                     .size(HALF_EXTENT * 2.0, HALF_EXTENT * 2.0),
             ),
         ),
-        MeshMaterial3d(materials.add(Color::srgb(0.04, 0.22, 0.70))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color: Color::srgb(0.035, 0.20, 0.62),
+            perceptual_roughness: 0.24,
+            reflectance: 0.65,
+            ..default()
+        })),
         Transform::from_xyz(0.0, WATER_TABLE, 0.0),
     ));
     let building_material = materials.add(Color::srgb(0.36, 0.38, 0.40));
@@ -641,25 +702,40 @@ fn spawn_battlefield_scene(
         body: meshes.add(Cuboid::new(1.8, 0.8, 2.4)),
         turret: meshes.add(Cuboid::new(1.2, 0.45, 1.2)),
         barrel: meshes.add(Cuboid::new(0.18, 0.18, 1.5)),
+        track: meshes.add(Cuboid::new(0.34, 0.42, 2.25)),
         firing_origin_marker: meshes.add(Sphere::new(0.12)),
     };
     let player_materials = tank_materials(&mut materials);
+    let track_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.07, 0.08, 0.08),
+        metallic: 0.35,
+        perceptual_roughness: 0.72,
+        ..default()
+    });
+    let barrel_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.12, 0.14, 0.15),
+        metallic: 0.65,
+        perceptual_roughness: 0.42,
+        ..default()
+    });
     let firing_origin_material = materials.add(Color::srgb(0.95, 0.85, 0.2));
     commands.insert_resource(TankPresentationAssets {
         materials: player_materials.clone(),
+        track_material: track_material.clone(),
+        barrel_material: barrel_material.clone(),
         firing_origin_material: firing_origin_material.clone(),
     });
     commands.insert_resource(tank_meshes.clone());
 
     for tank in tanks.0.iter().copied() {
-        let material = player_materials
-            [(tank.owner.0.saturating_sub(1) as usize) % player_materials.len()]
-        .clone();
         spawn_tank(
             &mut commands,
             tank,
             &tank_meshes,
-            material,
+            player_materials[(tank.owner.0.saturating_sub(1) as usize) % player_materials.len()]
+                .clone(),
+            track_material.clone(),
+            barrel_material.clone(),
             firing_origin_material.clone(),
             active_firing_representation(tank, turn.0.aim_for(tank.owner)),
         );
@@ -690,6 +766,28 @@ fn spawn_battlefield_scene(
         material: materials.add(StandardMaterial {
             base_color: Color::srgb(1.0, 0.55, 0.05),
             emissive: Color::srgb(4.0, 1.2, 0.05).into(),
+            ..default()
+        }),
+    });
+    commands.insert_resource(ImpactEffectAssets {
+        // Deliberately chunky: these need to read from the tactical camera like an old-school
+        // artillery firework, rather than disappearing behind the impact marker.
+        particle_mesh: meshes.add(Sphere::new(0.32)),
+        smoke_mesh: meshes.add(Sphere::new(0.55)),
+        hot_material: materials.add(StandardMaterial {
+            base_color: Color::srgb(1.0, 0.72, 0.08),
+            emissive: Color::srgb(5.0, 1.55, 0.04).into(),
+            ..default()
+        }),
+        dirt_material: materials.add(StandardMaterial {
+            base_color: Color::srgb(0.30, 0.16, 0.055),
+            perceptual_roughness: 0.9,
+            ..default()
+        }),
+        smoke_material: materials.add(StandardMaterial {
+            base_color: Color::srgba(0.13, 0.15, 0.16, 0.48),
+            alpha_mode: AlphaMode::Blend,
+            perceptual_roughness: 0.95,
             ..default()
         }),
     });
@@ -968,14 +1066,15 @@ fn update_match_setup(
             commands.entity(entity).despawn();
         }
         for tank in tanks.0.iter().copied() {
-            let material = presentation.materials
-                [(tank.owner.0.saturating_sub(1) as usize) % presentation.materials.len()]
-            .clone();
             spawn_tank(
                 &mut commands,
                 tank,
                 &tank_meshes,
-                material,
+                presentation.materials
+                    [(tank.owner.0.saturating_sub(1) as usize) % presentation.materials.len()]
+                .clone(),
+                presentation.track_material.clone(),
+                presentation.barrel_material.clone(),
                 presentation.firing_origin_material.clone(),
                 active_firing_representation(tank, turn.0.aim_for(tank.owner)),
             );
@@ -1150,6 +1249,7 @@ fn fire_current_player(
     latest_impact.impact = None;
     latest_impact.explosion_visual_scale = 1.0;
     latest_impact.hit_tank = false;
+    latest_impact.effect_requests.clear();
     true
 }
 
@@ -1738,8 +1838,10 @@ fn sync_tank_pose(
     }
     for (owner, mut transform) in &mut bodies {
         let tank = tank_for_player(&tanks.0, owner.0);
-        *transform =
-            direction_transform(tank.pose.body_forward).with_translation(Vec3::new(0.0, 0.4, 0.0));
+        let (body_scale, _, body_offset) = TankVisualModel::for_player(owner.0).dimensions();
+        *transform = direction_transform(tank.pose.body_forward)
+            .with_translation(Vec3::new(0.0, 0.4, body_offset))
+            .with_scale(body_scale);
     }
 }
 
@@ -2599,6 +2701,11 @@ fn advance_projectile(
                         .iter()
                         .zip(health_before)
                         .any(|(tank, health)| tank.health < health);
+                    queue_impact_effect(
+                        &mut latest_impact,
+                        impact.position,
+                        shot.impact.explosion_visual_scale,
+                    );
                     reconcile_living_tank_support(&mut tanks.0, &terrain.0);
                     shot.children[index] = None;
                 }
@@ -2795,6 +2902,11 @@ fn resolve_projectile_advance(
                 .iter()
                 .zip(health_before)
                 .any(|(tank, health)| tank.health < health);
+            queue_impact_effect(
+                latest_impact,
+                impact.position,
+                shot.impact.explosion_visual_scale,
+            );
             reconcile_living_tank_support(tanks, terrain);
             complete_resolution_if_settled(tanks, turn);
             None
@@ -2807,6 +2919,20 @@ fn resolve_projectile_advance(
             None
         }
     }
+}
+
+/// Requests cross from resolved impacts into presentation only after all authoritative outcomes
+/// have been computed. A full queue reduces visual density, never impact resolution.
+fn queue_impact_effect(latest: &mut LatestTerrainImpact, position: WorldPosition, scale: f32) {
+    if latest.effect_requests.len() >= MAX_PENDING_IMPACT_EFFECTS {
+        return;
+    }
+    latest.effect_requests.push(ImpactPresentationRequest {
+        position,
+        scale,
+        serial: latest.next_effect_serial,
+    });
+    latest.next_effect_serial = latest.next_effect_serial.wrapping_add(1);
 }
 
 /// Authoritative settling is intentionally fixed-step and follows projectile advancement. A
@@ -3046,6 +3172,139 @@ fn update_explosion_visuals(
     }
 }
 
+fn particle_budget(scale: f32) -> usize {
+    (10.0 + scale.clamp(0.35, 4.5) * 8.0).round() as usize
+}
+
+fn smoke_budget(scale: f32) -> usize {
+    (1.0 + scale.clamp(0.35, 4.5) * 1.5).round() as usize
+}
+
+fn cosmetic_fraction(serial: u64, index: u64) -> f32 {
+    let value = serial
+        .wrapping_mul(6_364_136_223_846_793_005)
+        .wrapping_add(index.wrapping_mul(1_442_695_040_888_963_407));
+    ((value >> 40) as f32) / ((1_u32 << 24) as f32)
+}
+
+fn effect_has_expired(elapsed_seconds: f32, lifetime_seconds: f32) -> bool {
+    elapsed_seconds >= lifetime_seconds
+}
+
+fn smoke_scale(initial_scale: f32, elapsed_seconds: f32, lifetime_seconds: f32) -> Vec3 {
+    let progress = (elapsed_seconds / lifetime_seconds).clamp(0.0, 1.0);
+    Vec3::new(1.25, 0.72, 1.25) * initial_scale * (1.0 + progress * 1.7)
+}
+
+fn spawn_impact_effects(
+    mut latest: ResMut<LatestTerrainImpact>,
+    assets: Res<ImpactEffectAssets>,
+    particles: Query<Entity, With<ImpactParticle>>,
+    smoke: Query<Entity, With<SmokePuff>>,
+    mut commands: Commands,
+) {
+    let requests = std::mem::take(&mut latest.effect_requests);
+    let mut remaining_particles =
+        MAX_ACTIVE_IMPACT_PARTICLES.saturating_sub(particles.iter().count());
+    let mut remaining_smoke = MAX_ACTIVE_SMOKE_PUFFS.saturating_sub(smoke.iter().count());
+    for request in requests {
+        let particle_count = particle_budget(request.scale)
+            .min(32)
+            .min(remaining_particles);
+        remaining_particles -= particle_count;
+        for index in 0..particle_count {
+            let a = cosmetic_fraction(request.serial, index as u64) * std::f32::consts::TAU;
+            let speed = 4.0
+                + request.scale
+                    * (2.0 + cosmetic_fraction(request.serial, index as u64 + 31) * 3.0);
+            let velocity = Vec3::new(a.cos() * speed, 3.6 + request.scale * 1.8, a.sin() * speed);
+            let material = if index % 2 == 0 {
+                assets.hot_material.clone()
+            } else {
+                assets.dirt_material.clone()
+            };
+            commands.spawn((
+                Name::new("Impact debris"),
+                ImpactParticle {
+                    velocity,
+                    elapsed_seconds: 0.0,
+                    lifetime_seconds: 0.85 + request.scale * 0.16,
+                    initial_scale: 0.85 + request.scale * 0.18,
+                },
+                Mesh3d(assets.particle_mesh.clone()),
+                MeshMaterial3d(material),
+                Transform::from_translation(
+                    to_bevy_position(request.position)
+                        + Vec3::new(a.cos() * 0.24, 0.38, a.sin() * 0.24),
+                ),
+            ));
+        }
+        let smoke_count = smoke_budget(request.scale).min(remaining_smoke);
+        remaining_smoke -= smoke_count;
+        for index in 0..smoke_count {
+            let fraction = cosmetic_fraction(request.serial, index as u64 + 91);
+            commands.spawn((
+                Name::new("Impact smoke"),
+                SmokePuff {
+                    velocity: Vec3::new(
+                        (fraction - 0.5) * 0.35,
+                        0.32 + fraction * 0.35,
+                        (0.5 - fraction) * 0.25,
+                    ),
+                    elapsed_seconds: 0.0,
+                    lifetime_seconds: 1.8 + request.scale * 0.55,
+                    initial_scale: 0.45 + request.scale * 0.28,
+                },
+                Mesh3d(assets.smoke_mesh.clone()),
+                MeshMaterial3d(assets.smoke_material.clone()),
+                Transform::from_translation(to_bevy_position(request.position) + Vec3::Y * 0.2),
+            ));
+        }
+    }
+}
+
+fn update_impact_particles(
+    time: Res<Time>,
+    mut commands: Commands,
+    mut particles: Query<(Entity, &mut ImpactParticle, &mut Transform)>,
+) {
+    for (entity, mut particle, mut transform) in &mut particles {
+        particle.elapsed_seconds += time.delta_secs();
+        if effect_has_expired(particle.elapsed_seconds, particle.lifetime_seconds) {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        particle.velocity.y -= PARTICLE_GRAVITY * time.delta_secs();
+        transform.translation += particle.velocity * time.delta_secs();
+        transform.scale = Vec3::splat(
+            particle.initial_scale * (1.0 - particle.elapsed_seconds / particle.lifetime_seconds),
+        );
+    }
+}
+
+fn update_smoke_puffs(
+    time: Res<Time>,
+    wind: Res<BattlefieldWind>,
+    mut commands: Commands,
+    mut smoke: Query<(Entity, &mut SmokePuff, &mut Transform)>,
+) {
+    let drift = wind.0.horizontal_acceleration();
+    for (entity, mut puff, mut transform) in &mut smoke {
+        puff.elapsed_seconds += time.delta_secs();
+        if effect_has_expired(puff.elapsed_seconds, puff.lifetime_seconds) {
+            commands.entity(entity).despawn();
+            continue;
+        }
+        transform.translation +=
+            (puff.velocity + Vec3::new(drift.x * 0.08, 0.0, drift.z * 0.08)) * time.delta_secs();
+        transform.scale = smoke_scale(
+            puff.initial_scale,
+            puff.elapsed_seconds,
+            puff.lifetime_seconds,
+        );
+    }
+}
+
 fn should_spawn_explosion(has_terrain_impact: bool, impact_already_consumed: bool) -> bool {
     has_terrain_impact && !impact_already_consumed
 }
@@ -3076,26 +3335,34 @@ struct TankMeshes {
     body: Handle<Mesh>,
     turret: Handle<Mesh>,
     barrel: Handle<Mesh>,
+    track: Handle<Mesh>,
     firing_origin_marker: Handle<Mesh>,
 }
 
 #[derive(Resource)]
 struct TankPresentationAssets {
     materials: Vec<Handle<StandardMaterial>>,
+    track_material: Handle<StandardMaterial>,
+    barrel_material: Handle<StandardMaterial>,
     firing_origin_material: Handle<StandardMaterial>,
 }
 
+#[allow(clippy::too_many_arguments)]
 fn spawn_tank(
     commands: &mut Commands,
     tank: Tank,
     meshes: &TankMeshes,
     material: Handle<StandardMaterial>,
+    track_material: Handle<StandardMaterial>,
+    barrel_material: Handle<StandardMaterial>,
     firing_origin_material: Handle<StandardMaterial>,
     firing: TankFiringRepresentation,
 ) {
     let position = tank.pose.position;
     let firing_origin = firing.muzzle_position;
     let player_name = format!("Player {} tank", tank.owner.0);
+    let model = TankVisualModel::for_player(tank.owner);
+    let (body_scale, turret_scale, body_offset) = model.dimensions();
 
     commands
         .spawn((
@@ -3109,21 +3376,32 @@ fn spawn_tank(
                 Mesh3d(meshes.body.clone()),
                 MeshMaterial3d(material.clone()),
                 direction_transform(tank.pose.body_forward)
-                    .with_translation(Vec3::new(0.0, 0.4, 0.0)),
+                    .with_translation(Vec3::new(0.0, 0.4, body_offset))
+                    .with_scale(body_scale),
                 TankBody(tank.owner),
             ));
+            for side in [-1.0, 1.0] {
+                tank_parent.spawn((
+                    Mesh3d(meshes.track.clone()),
+                    MeshMaterial3d(track_material.clone()),
+                    direction_transform(tank.pose.body_forward)
+                        .with_translation(Vec3::new(side * 0.76 * body_scale.x, 0.25, body_offset))
+                        .with_scale(Vec3::new(body_scale.x, body_scale.y, body_scale.z)),
+                ));
+            }
 
             let mut turret_entity = tank_parent.spawn((
                 Mesh3d(meshes.turret.clone()),
                 MeshMaterial3d(material.clone()),
                 direction_transform(tank.pose.turret_forward)
-                    .with_translation(Vec3::new(0.0, 1.0, 0.0)),
+                    .with_translation(Vec3::new(0.0, 1.0, body_offset * 0.3))
+                    .with_scale(turret_scale),
                 TankTurret(tank.owner),
             ));
             turret_entity.with_children(|turret| {
                 turret.spawn((
                     Mesh3d(meshes.barrel.clone()),
-                    MeshMaterial3d(material.clone()),
+                    MeshMaterial3d(barrel_material.clone()),
                     Transform::from_xyz(0.0, 0.0, -1.35),
                     TankBarrel(tank.owner),
                 ));
@@ -3145,6 +3423,47 @@ fn spawn_tank(
 
 fn direction_transform(direction: HorizontalDirection) -> Transform {
     Transform::IDENTITY.looking_to(Vec3::new(direction.x, 0.0, direction.z), Vec3::Y)
+}
+
+impl TankVisualModel {
+    const ALL: [Self; 5] = [
+        Self::Classic,
+        Self::Heavy,
+        Self::LowProfile,
+        Self::Compact,
+        Self::Angular,
+    ];
+
+    /// This is a pure cosmetic assignment: it cannot consume the match's authoritative streams.
+    fn for_player(player: PlayerId) -> Self {
+        Self::ALL[(player.0.saturating_sub(1) as usize) % Self::ALL.len()]
+    }
+
+    fn dimensions(self) -> (Vec3, Vec3, f32) {
+        match self {
+            Self::Classic => (Vec3::ONE, Vec3::ONE, 0.0),
+            Self::Heavy => (
+                Vec3::new(1.28, 1.15, 1.05),
+                Vec3::new(1.22, 1.25, 1.12),
+                0.0,
+            ),
+            Self::LowProfile => (
+                Vec3::new(0.95, 0.68, 1.35),
+                Vec3::new(1.12, 0.65, 1.15),
+                -0.12,
+            ),
+            Self::Compact => (
+                Vec3::new(0.78, 1.05, 0.78),
+                Vec3::new(0.82, 1.35, 0.82),
+                0.12,
+            ),
+            Self::Angular => (
+                Vec3::new(1.12, 0.82, 1.18),
+                Vec3::new(0.78, 0.9, 1.28),
+                -0.08,
+            ),
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3612,6 +3931,68 @@ mod tests {
             explosion_progress(EXPLOSION_VISUAL_DURATION_SECONDS * 2.0),
             1.0
         );
+    }
+
+    #[test]
+    fn cosmetic_tank_models_repeat_only_after_the_five_unique_silhouettes() {
+        let models = (1..=8)
+            .map(|id| TankVisualModel::for_player(PlayerId(id)))
+            .collect::<Vec<_>>();
+        assert_eq!(models[..5], TankVisualModel::ALL);
+        assert_eq!(models[5], TankVisualModel::Classic);
+        assert_eq!(models[7], TankVisualModel::LowProfile);
+    }
+
+    #[test]
+    fn cosmetic_models_do_not_perturb_authoritative_world_generation() {
+        let seed = BattlefieldSeed(91);
+        let players = (1..=8).map(PlayerId).collect::<Vec<_>>();
+        let before = generate_match_world(seed, &players);
+        let _models = players
+            .iter()
+            .copied()
+            .map(TankVisualModel::for_player)
+            .collect::<Vec<_>>();
+        let after = generate_match_world(seed, &players);
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn impact_effect_budgets_are_monotonic_and_bounded() {
+        assert!(particle_budget(1.5) > particle_budget(1.0));
+        assert!(particle_budget(4.5) > particle_budget(1.5));
+        assert!(smoke_budget(4.5) > smoke_budget(1.0));
+        assert!(particle_budget(4.5) <= MAX_ACTIVE_IMPACT_PARTICLES);
+        assert!(smoke_budget(4.5) <= MAX_ACTIVE_SMOKE_PUFFS);
+        assert_eq!(cosmetic_fraction(4, 7), cosmetic_fraction(4, 7));
+    }
+
+    #[test]
+    fn smoke_lifecycle_is_finite_and_expands_without_gameplay_state() {
+        assert!(!effect_has_expired(1.0, 1.5));
+        assert!(effect_has_expired(1.5, 1.5));
+        assert!(smoke_scale(1.0, 1.0, 2.0).x > smoke_scale(1.0, 0.0, 2.0).x);
+        assert!(smoke_budget(4.5) <= MAX_ACTIVE_SMOKE_PUFFS);
+    }
+
+    #[test]
+    fn cosmetic_impact_queue_is_bounded_without_changing_existing_impact_fields() {
+        let impact = WorldPosition {
+            x: 1.0,
+            y: 2.0,
+            z: 3.0,
+        };
+        let mut latest = LatestTerrainImpact {
+            impact: Some(TerrainImpact { position: impact }),
+            explosion_visual_scale: 1.5,
+            ..default()
+        };
+        for _ in 0..MAX_PENDING_IMPACT_EFFECTS + 5 {
+            queue_impact_effect(&mut latest, impact, 1.0);
+        }
+        assert_eq!(latest.effect_requests.len(), MAX_PENDING_IMPACT_EFFECTS);
+        assert_eq!(latest.impact, Some(TerrainImpact { position: impact }));
+        assert_eq!(latest.explosion_visual_scale, 1.5);
     }
 
     #[test]
