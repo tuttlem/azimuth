@@ -91,6 +91,7 @@ Cargo quality policy before producing downloadable native builds.
 
 * [x] Build native Windows x86_64, Linux x86_64, and macOS arm64 packages after a successful `master` quality gate.
 * [x] Publish the three packages as downloadable artifacts on the corresponding GitHub Actions run.
+* [x] Publish tagged `v*.*.*` builds as GitHub Releases with platform archives.
 
 ---
 

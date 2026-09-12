@@ -137,6 +137,10 @@ source checkout are not required. Linux users may need `chmod +x azimuth-game` a
 and need ordinary local graphics/audio driver support. The macOS build is an unsigned Apple-silicon
 binary, so normal Gatekeeper behavior can apply; signing and notarization are not included.
 
+Pushing a semantic version tag such as `v0.2.0` runs the same native builds and then creates a
+GitHub Release with the Windows ZIP and Linux/macOS tarballs attached. Normal `master` pushes do
+not create releases; their packages remain available from the workflow run.
+
 ## Workspace Layout
 
 `crates/azimuth-game` is the initial game application member. The repository root holds workspace
