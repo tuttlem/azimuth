@@ -8,7 +8,6 @@ pub const HIGH_EXPLOSIVE_STARTING_ROUNDS: u8 = 2;
 pub const HEAVY_SHELL_STARTING_ROUNDS: u8 = 2;
 pub const MIRV_STARTING_ROUNDS: u8 = 2;
 pub const CLUSTER_BOMB_STARTING_ROUNDS: u8 = 2;
-pub const BOMB_NET_STARTING_ROUNDS: u8 = 1;
 pub const ROLLER_STARTING_ROUNDS: u8 = 2;
 pub const BUNKER_BUSTER_STARTING_ROUNDS: u8 = 2;
 pub const DIRT_BOMB_STARTING_ROUNDS: u8 = 2;
@@ -17,9 +16,8 @@ pub const BOUNCER_STARTING_ROUNDS: u8 = 2;
 pub const NUKE_STARTING_ROUNDS: u8 = 1;
 pub const MIRV_CHILD_COUNT: usize = 5;
 pub const CLUSTER_BOMB_CHILD_COUNT: usize = 10;
-pub const BOMB_NET_CHILD_COUNT: usize = 16;
-/// The largest concrete barrage currently in the game (the 4×4 Bomb Net).
-pub const MAX_SHOT_CHILDREN: usize = BOMB_NET_CHILD_COUNT;
+/// Cluster Bomb is the largest concrete barrage currently in the game.
+pub const MAX_SHOT_CHILDREN: usize = CLUSTER_BOMB_CHILD_COUNT;
 
 /// Stable gameplay identity. Display names and inventory storage order are never identity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -29,7 +27,6 @@ pub enum WeaponId {
     HeavyShell,
     Mirv,
     ClusterBomb,
-    BombNet,
     Roller,
     BunkerBuster,
     DirtBomb,
@@ -49,9 +46,8 @@ pub const fn weapon_price(id: WeaponId) -> Option<u32> {
         WeaponId::HeavyShell => Some(250),
         WeaponId::Mirv => Some(600),
         WeaponId::ClusterBomb => Some(550),
-        WeaponId::BombNet => Some(650),
         WeaponId::Roller => Some(400),
-        WeaponId::BunkerBuster => Some(450),
+        WeaponId::BunkerBuster => Some(700),
         WeaponId::DirtBomb => Some(350),
         WeaponId::CurveBall => Some(400),
         WeaponId::Bouncer => Some(350),
@@ -190,19 +186,6 @@ pub fn weapon_definition(id: WeaponId) -> WeaponDefinition {
                 explosion_visual_scale: 0.45,
             },
         ),
-        WeaponId::BombNet => WeaponDefinition::new(
-            WeaponId::BombNet,
-            "BOMB NET",
-            AmmunitionRule::Limited(BOMB_NET_STARTING_ROUNDS),
-            STANDARD_BALLISTIC_PROJECTILE,
-            ImpactProfile {
-                damage_radius: 2.1,
-                maximum_damage: 12,
-                crater: Crater::new(1.45, 0.5).expect("net crater"),
-                mound: None,
-                explosion_visual_scale: 0.35,
-            },
-        ),
         WeaponId::Roller => WeaponDefinition::new(
             WeaponId::Roller,
             "ROLLER",
@@ -222,9 +205,11 @@ pub fn weapon_definition(id: WeaponId) -> WeaponDefinition {
             AmmunitionRule::Limited(BUNKER_BUSTER_STARTING_ROUNDS),
             STANDARD_BALLISTIC_PROJECTILE,
             ImpactProfile {
-                damage_radius: 6.5,
-                maximum_damage: 48,
-                crater: Crater::new(2.8, 3.6).expect("bunker crater"),
+                // This weapon tunnels before resolving. Its intentionally zero damage profile
+                // makes the resulting deep excavation positional terrain play, never a blast.
+                damage_radius: 0.0,
+                maximum_damage: 0,
+                crater: Crater::new(8.0, 12.0).expect("bunker crater"),
                 mound: None,
                 explosion_visual_scale: 1.15,
             },
@@ -327,7 +312,6 @@ pub struct PlayerWeaponLoadout {
     heavy_shell: WeaponAvailability,
     mirv: WeaponAvailability,
     cluster_bomb: WeaponAvailability,
-    bomb_net: WeaponAvailability,
     roller: WeaponAvailability,
     bunker_buster: WeaponAvailability,
     dirt_bomb: WeaponAvailability,
@@ -352,9 +336,6 @@ impl Default for PlayerWeaponLoadout {
             mirv: WeaponAvailability::from_rule(weapon_definition(WeaponId::Mirv).ammunition),
             cluster_bomb: WeaponAvailability::from_rule(
                 weapon_definition(WeaponId::ClusterBomb).ammunition,
-            ),
-            bomb_net: WeaponAvailability::from_rule(
-                weapon_definition(WeaponId::BombNet).ammunition,
             ),
             roller: WeaponAvailability::from_rule(weapon_definition(WeaponId::Roller).ammunition),
             bunker_buster: WeaponAvailability::from_rule(
@@ -385,7 +366,6 @@ impl PlayerWeaponLoadout {
             WeaponId::HeavyShell => &mut self.heavy_shell,
             WeaponId::Mirv => &mut self.mirv,
             WeaponId::ClusterBomb => &mut self.cluster_bomb,
-            WeaponId::BombNet => &mut self.bomb_net,
             WeaponId::Roller => &mut self.roller,
             WeaponId::BunkerBuster => &mut self.bunker_buster,
             WeaponId::DirtBomb => &mut self.dirt_bomb,
@@ -413,7 +393,6 @@ impl PlayerWeaponLoadout {
             WeaponId::HeavyShell => self.heavy_shell,
             WeaponId::Mirv => self.mirv,
             WeaponId::ClusterBomb => self.cluster_bomb,
-            WeaponId::BombNet => self.bomb_net,
             WeaponId::Roller => self.roller,
             WeaponId::BunkerBuster => self.bunker_buster,
             WeaponId::DirtBomb => self.dirt_bomb,
@@ -443,7 +422,6 @@ impl PlayerWeaponLoadout {
             WeaponId::HeavyShell => &mut self.heavy_shell,
             WeaponId::Mirv => &mut self.mirv,
             WeaponId::ClusterBomb => &mut self.cluster_bomb,
-            WeaponId::BombNet => &mut self.bomb_net,
             WeaponId::Roller => &mut self.roller,
             WeaponId::BunkerBuster => &mut self.bunker_buster,
             WeaponId::DirtBomb => &mut self.dirt_bomb,
@@ -517,8 +495,8 @@ pub enum ContactState {
     },
 }
 
-/// A committed shot owns all of its active projectiles. The fixed array is sized by the concrete
-/// 4×4 Bomb Net, rather than being an open-ended projectile behaviour framework.
+/// A committed shot owns all of its active projectiles. The fixed array is sized by Cluster Bomb,
+/// rather than being an open-ended projectile behaviour framework.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FiredShot {
     pub weapon: WeaponId,
@@ -542,10 +520,7 @@ impl FiredShot {
     }
 
     pub fn is_deployment_carrier(self) -> bool {
-        matches!(
-            self.weapon,
-            WeaponId::Mirv | WeaponId::ClusterBomb | WeaponId::BombNet
-        ) && !self.split
+        matches!(self.weapon, WeaponId::Mirv | WeaponId::ClusterBomb) && !self.split
     }
     pub fn has_active_projectiles(self) -> bool {
         !self.split || self.children.iter().any(Option::is_some)
@@ -621,11 +596,9 @@ mod tests {
     #[test]
     fn arsenal_pack_inventory_is_limited_and_profiles_preserve_distinct_roles() {
         let cluster = weapon_definition(WeaponId::ClusterBomb);
-        let net = weapon_definition(WeaponId::BombNet);
         let roller = weapon_definition(WeaponId::Roller);
         let bunker = weapon_definition(WeaponId::BunkerBuster);
         assert_eq!(cluster.ammunition, AmmunitionRule::Limited(2));
-        assert_eq!(net.ammunition, AmmunitionRule::Limited(1));
         assert_eq!(roller.ammunition, AmmunitionRule::Limited(2));
         assert_eq!(bunker.ammunition, AmmunitionRule::Limited(2));
         assert!(
@@ -634,17 +607,13 @@ mod tests {
                     .impact
                     .maximum_damage
         );
-        assert!(net.impact.maximum_damage < cluster.impact.maximum_damage);
-        assert!(bunker.impact.crater != weapon_definition(WeaponId::HighExplosive).impact.crater);
-        let mut loadout = PlayerWeaponLoadout::default();
-        assert!(loadout.select(WeaponId::BombNet));
-        assert_eq!(loadout.commit_selected().unwrap().id, WeaponId::BombNet);
-        assert_eq!(loadout.selected(), WeaponId::BasicShell);
-        assert!(!loadout.select(WeaponId::BombNet));
+        assert_eq!(bunker.impact.maximum_damage, 0);
+        assert_eq!(bunker.impact.damage_radius, 0.0);
+        assert!(weapon_price(WeaponId::BunkerBuster) > weapon_price(WeaponId::HighExplosive));
     }
 
     #[test]
-    fn fired_shot_has_a_bounded_capacity_for_the_concrete_net_pattern() {
+    fn fired_shot_has_a_bounded_capacity_for_cluster_bomb() {
         let projectile = Projectile::launch(
             crate::projectile::ShotParameters::new(
                 WorldPosition {
@@ -658,8 +627,8 @@ mod tests {
             )
             .unwrap(),
         );
-        let shot = FiredShot::new(weapon_definition(WeaponId::BombNet), projectile);
-        assert_eq!(shot.children.len(), BOMB_NET_CHILD_COUNT);
+        let shot = FiredShot::new(weapon_definition(WeaponId::ClusterBomb), projectile);
+        assert_eq!(shot.children.len(), CLUSTER_BOMB_CHILD_COUNT);
         assert_eq!(shot.contact, ContactState::Airborne);
         assert!(shot.is_deployment_carrier());
     }

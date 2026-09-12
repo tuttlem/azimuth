@@ -41,8 +41,8 @@ use tank::{
 };
 use turn::{MatchState, TurnPhase, TurnState};
 use weapon::{
-    BOMB_NET_CHILD_COUNT, CLUSTER_BOMB_CHILD_COUNT, ContactState, FiredShot, MIRV_CHILD_COUNT,
-    PlayerWeaponLoadouts, WeaponAvailability, WeaponId, weapon_definition,
+    CLUSTER_BOMB_CHILD_COUNT, ContactState, FiredShot, MIRV_CHILD_COUNT, PlayerWeaponLoadouts,
+    WeaponAvailability, WeaponId, weapon_definition,
 };
 use world::{WorldPosition, WorldVector};
 
@@ -263,6 +263,14 @@ struct MatchSetupGate {
 #[derive(Resource)]
 struct PendingMatchConfiguration(MatchConfiguration);
 
+/// A shot snapshot brackets authoritative resolution so currency is based on health that was
+/// actually removed after saturation, rather than a weapon's advertised damage.
+#[derive(Resource, Default)]
+struct DamageAccounting {
+    owner: Option<PlayerId>,
+    health_before: Vec<(PlayerId, u8)>,
+}
+
 #[derive(Component)]
 struct MatchSetupOverlay;
 #[derive(Component)]
@@ -277,7 +285,6 @@ struct ProjectileVisualAssets {
     mirv_carrier_material: Handle<StandardMaterial>,
     mirv_child_material: Handle<StandardMaterial>,
     cluster_material: Handle<StandardMaterial>,
-    net_material: Handle<StandardMaterial>,
     roller_material: Handle<StandardMaterial>,
     bunker_material: Handle<StandardMaterial>,
 }
@@ -573,6 +580,7 @@ fn main() {
         .insert_resource(MatchSetupGate::default())
         .insert_resource(PendingMatchConfiguration(configuration))
         .insert_resource(GameSession::new(MatchConfiguration::default().players))
+        .insert_resource(DamageAccounting::default())
         .insert_resource(AimRepeatState::default())
         .insert_resource(TurretDinkCooldown::default())
         .insert_resource(BattlefieldGravity(
@@ -627,7 +635,13 @@ fn main() {
         .add_systems(Update, (update_session_flow, sync_session_flow_overlay))
         .add_systems(
             FixedUpdate,
-            (advance_projectile, advance_tank_settling).chain(),
+            (
+                begin_damage_accounting,
+                advance_projectile,
+                credit_resolved_damage,
+                advance_tank_settling,
+            )
+                .chain(),
         )
         .run();
 }
@@ -775,7 +789,6 @@ fn spawn_battlefield_scene(
         mirv_carrier_material: materials.add(Color::srgb(0.65, 0.08, 0.08)),
         mirv_child_material: materials.add(Color::srgb(0.18, 0.02, 0.02)),
         cluster_material: materials.add(Color::srgb(1.0, 0.42, 0.02)),
-        net_material: materials.add(Color::srgb(0.52, 0.08, 0.72)),
         roller_material: materials.add(Color::srgb(0.16, 0.30, 0.12)),
         bunker_material: materials.add(Color::srgb(0.08, 0.09, 0.11)),
     });
@@ -987,16 +1000,22 @@ fn sync_session_flow_overlay(
             session
                 .players
                 .iter()
-                .map(|p| format!(
-                    "{}  +${}  CASH ${}",
-                    p.configuration.display_name,
-                    session
+                .map(|p| {
+                    let earnings = session
                         .earnings
                         .iter()
                         .find(|(id, _)| *id == p.configuration.id)
-                        .map_or(0, |(_, e)| e.total()),
-                    p.cash
-                ))
+                        .map(|(_, earnings)| *earnings)
+                        .unwrap_or_default();
+                    format!(
+                        "{}  DAMAGE ${} + PLACEMENT ${} = ${}  CASH ${}",
+                        p.configuration.display_name,
+                        earnings.damage_income,
+                        earnings.placement_income,
+                        earnings.total(),
+                        p.cash
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("\n")
         )),
@@ -1432,7 +1451,6 @@ fn projectile_material(
         WeaponId::HeavyShell => assets.heavy_material.clone(),
         WeaponId::Mirv => assets.mirv_carrier_material.clone(),
         WeaponId::ClusterBomb => assets.cluster_material.clone(),
-        WeaponId::BombNet => assets.net_material.clone(),
         WeaponId::Roller => assets.roller_material.clone(),
         WeaponId::BunkerBuster => assets.bunker_material.clone(),
         WeaponId::DirtBomb => assets.cluster_material.clone(),
@@ -1485,7 +1503,7 @@ fn update_session_flow(
         for player in &mut session.players {
             player.loadout = weapons.0.for_player(player.configuration.id);
         }
-        session.finalise(turn.0.match_state);
+        session.finalise(&turn.0.placement_order());
         return;
     }
     if !keyboard.just_pressed(KeyCode::Enter) {
@@ -1688,10 +1706,8 @@ fn select_weapon_input(
     } else if keyboard.just_pressed(KeyCode::Digit5) {
         Some(WeaponId::ClusterBomb)
     } else if keyboard.just_pressed(KeyCode::Digit6) {
-        Some(WeaponId::BombNet)
-    } else if keyboard.just_pressed(KeyCode::Digit7) {
         Some(WeaponId::Roller)
-    } else if keyboard.just_pressed(KeyCode::Digit8) {
+    } else if keyboard.just_pressed(KeyCode::Digit7) {
         Some(WeaponId::BunkerBuster)
     } else {
         None
@@ -2296,14 +2312,13 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
         });
 }
 
-fn weapon_strip_order() -> [WeaponId; 12] {
+fn weapon_strip_order() -> [WeaponId; 11] {
     [
         WeaponId::BasicShell,
         WeaponId::HighExplosive,
         WeaponId::HeavyShell,
         WeaponId::Mirv,
         WeaponId::ClusterBomb,
-        WeaponId::BombNet,
         WeaponId::Roller,
         WeaponId::BunkerBuster,
         WeaponId::DirtBomb,
@@ -2320,7 +2335,6 @@ fn weapon_strip_label(weapon: WeaponId) -> &'static str {
         WeaponId::HeavyShell => "HEAVY",
         WeaponId::Mirv => "MIRV",
         WeaponId::ClusterBomb => "CLSTR",
-        WeaponId::BombNet => "NET",
         WeaponId::Roller => "ROLL",
         WeaponId::BunkerBuster => "BUNK",
         WeaponId::DirtBomb => "DIRT",
@@ -2817,6 +2831,49 @@ fn player_name(player: PlayerId) -> String {
     format!("Player {}", player.0)
 }
 
+fn begin_damage_accounting(
+    flight: Res<ProjectileFlight>,
+    turn: Res<CurrentTurn>,
+    tanks: Res<Tanks>,
+    mut accounting: ResMut<DamageAccounting>,
+) {
+    if flight.0.is_some() && accounting.owner.is_none() {
+        accounting.owner = Some(turn.0.current_player);
+        accounting.health_before = tanks
+            .0
+            .iter()
+            .map(|tank| (tank.owner, tank.health))
+            .collect();
+    }
+}
+
+fn credit_resolved_damage(
+    tanks: Res<Tanks>,
+    flight: Res<ProjectileFlight>,
+    mut session: ResMut<GameSession>,
+    mut accounting: ResMut<DamageAccounting>,
+) {
+    let Some(owner) = accounting.owner else {
+        return;
+    };
+    for (target, before) in &mut accounting.health_before {
+        let after = tanks
+            .0
+            .iter()
+            .find(|tank| tank.owner == *target)
+            .expect("accounted tank remains configured")
+            .health;
+        if after < *before {
+            session.credit_damage(owner, *target, *before - after);
+            *before = after;
+        }
+    }
+    if flight.0.is_none() {
+        accounting.owner = None;
+        accounting.health_before.clear();
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn advance_projectile(
     keyboard: Res<ButtonInput<KeyCode>>,
@@ -3023,7 +3080,6 @@ fn advance_projectile(
         let child_count = match shot.weapon {
             WeaponId::Mirv => MIRV_CHILD_COUNT,
             WeaponId::ClusterBomb => CLUSTER_BOMB_CHILD_COUNT,
-            WeaponId::BombNet => BOMB_NET_CHILD_COUNT,
             _ => unreachable!("only deployment carriers reach this branch"),
         };
         for index in 0..child_count {
@@ -3034,23 +3090,11 @@ fn advance_projectile(
                     let ring = index as f32 - 4.5;
                     (ring * 0.42, ((index % 3) as f32 - 1.0) * 0.24)
                 }
-                WeaponId::BombNet => {
-                    let row = index / 4;
-                    let column = index % 4;
-                    ((column as f32 - 1.5) * 2.4, (row as f32 - 1.5) * 1.15)
-                }
                 _ => unreachable!(),
             };
             child.velocity = child
                 .velocity
-                .added(right.scaled(
-                    lateral
-                        * if shot.weapon == WeaponId::BombNet {
-                            0.72
-                        } else {
-                            0.8
-                        },
-                ))
+                .added(right.scaled(lateral * 0.8))
                 .added(forward.scaled(forward_offset));
             shot.children[index] = Some(child);
         }
@@ -3294,7 +3338,6 @@ fn sync_projectile_visual(
         let child_material = match shot.weapon {
             WeaponId::Mirv => assets.mirv_child_material.clone(),
             WeaponId::ClusterBomb => assets.cluster_material.clone(),
-            WeaponId::BombNet => assets.net_material.clone(),
             _ => assets.basic_material.clone(),
         };
         for position in &positions {

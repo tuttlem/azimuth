@@ -16,9 +16,11 @@ craters, settling tanks, and presentation effects make each battlefield distinct
 with spatial fire, impact, and turret-adjustment audio.
 
 The arsenal now extends beyond the original Basic Shell, High Explosive, and Heavy Shell to include
-weapons such as MIRV, Cluster Bomb, Bomb Net, Roller, Bunker Buster, Dirt Bomb, Curve Ball,
-Bouncer, and Nuke. Weapon selection and ammunition are independent for each player; a fired shot
-captures its weapon profile before flight, so later HUD/selection changes cannot alter it.
+weapons such as MIRV, Cluster Bomb, Roller, Bunker Buster, Dirt Bomb, Curve Ball, Bouncer, and
+Nuke. Bunker Buster is a terrain-only deep penetrator: it reshapes the battlefield without harming
+tanks. Round income is actual opponent health removed at $10 per point plus the $5,000/$2,500/$1,000
+podium award. Weapon selection and ammunition are independent for each player; a fired shot captures
+its weapon profile before flight, so later HUD/selection changes cannot alter it.
 
 ## Prerequisites
 

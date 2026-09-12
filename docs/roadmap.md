@@ -569,13 +569,12 @@ wind-resistance is visible and useful without making it wind-immune.
 * [ ] Configurable split altitude or split timing if gameplay supports it.
 * [x] Independent child-projectile trajectories.
 * [x] Wind interaction for child projectiles.
-* [x] Bomb Net: deploy a broad, readable horizontal grid or net of small explosives.
 * [ ] Death Sphere: an unusual looping or figure-eight carrier that periodically drops small explosives.
 
 ## Terrain Weapons
 
 * [ ] Crater-focused weapon.
-* [x] Deep/narrow penetrator.
+* [x] Deep/narrow terrain-only penetrator (Bunker Buster): massive directional excavation with no tank damage.
 * [x] Terrain-building dirt bomb.
 * [ ] Terrain-flattening weapon.
 * [ ] Ridge/wall-forming weapon if fun.

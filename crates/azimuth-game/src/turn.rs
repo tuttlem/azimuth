@@ -25,6 +25,7 @@ pub struct TurnState {
     pub match_state: MatchState,
     players: Vec<PlayerId>,
     aims: Vec<(PlayerId, AimingState)>,
+    eliminated: Vec<PlayerId>,
 }
 impl TurnState {
     pub fn new(aims: Vec<(PlayerId, AimingState)>) -> Self {
@@ -43,6 +44,7 @@ impl TurnState {
             match_state: MatchState::InProgress,
             players,
             aims,
+            eliminated: Vec::new(),
         }
     }
     pub fn aim_for(&self, player: PlayerId) -> AimingState {
@@ -128,6 +130,14 @@ impl TurnState {
         if self.phase != TurnPhase::ResolvingFire || survivors.len() != self.players.len() {
             return false;
         }
+        for (index, alive) in survivors.iter().copied().enumerate() {
+            let player = self.players[index];
+            if !alive && !self.eliminated.contains(&player) {
+                // The configured slot order is the authoritative deterministic tie-break when
+                // one impact eliminates several players together.
+                self.eliminated.push(player);
+            }
+        }
         let alive: Vec<_> = survivors
             .iter()
             .enumerate()
@@ -144,6 +154,14 @@ impl TurnState {
             self.phase = TurnPhase::Finished;
         }
         true
+    }
+    pub fn placement_order(&self) -> Vec<PlayerId> {
+        let MatchState::Winner(winner) = self.match_state else {
+            return Vec::new();
+        };
+        let mut order = vec![winner];
+        order.extend(self.eliminated.iter().rev().copied());
+        order
     }
     fn advance(&mut self, survivors: &[bool]) {
         let current = self
@@ -215,5 +233,9 @@ mod tests {
         s.begin_fire();
         s.complete_fire_resolution([false, false, true]);
         assert_eq!(s.match_state, MatchState::Winner(PlayerId(3)));
+        assert_eq!(
+            s.placement_order(),
+            vec![PlayerId(3), PlayerId(2), PlayerId(1)]
+        );
     }
 }

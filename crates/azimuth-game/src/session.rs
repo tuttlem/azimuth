@@ -1,14 +1,14 @@
 use crate::{
     match_setup::PlayerConfiguration,
     tank::PlayerId,
-    turn::MatchState,
     weapon::{PlayerWeaponLoadout, WeaponId, weapon_price},
 };
 use bevy::prelude::Resource;
 
 pub const CASH_PER_DAMAGE: u32 = 10;
-pub const ELIMINATION_BONUS: u32 = 250;
-pub const ROUND_WIN_BONUS: u32 = 500;
+pub const FIRST_PLACE_AWARD: u32 = 5_000;
+pub const SECOND_PLACE_AWARD: u32 = 2_500;
+pub const THIRD_PLACE_AWARD: u32 = 1_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SessionPhase {
@@ -30,13 +30,12 @@ pub struct SessionPlayer {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RoundEarnings {
-    pub damage: u32,
-    pub eliminations: u32,
-    pub winner: u32,
+    pub damage_income: u32,
+    pub placement_income: u32,
 }
 impl RoundEarnings {
     pub fn total(self) -> u32 {
-        self.damage + self.eliminations + self.winner
+        self.damage_income + self.placement_income
     }
 }
 
@@ -88,32 +87,30 @@ impl GameSession {
             .expect("configured player")
             .1
     }
-    pub fn credit_damage(
-        &mut self,
-        owner: PlayerId,
-        target: PlayerId,
-        applied: u8,
-        eliminated: bool,
-    ) {
+    pub fn credit_damage(&mut self, owner: PlayerId, target: PlayerId, actual_health_removed: u8) {
         if owner == target {
             return;
         }
-        let damage = applied as u32 * CASH_PER_DAMAGE;
-        let elimination = if eliminated { ELIMINATION_BONUS } else { 0 };
+        let damage = actual_health_removed as u32 * CASH_PER_DAMAGE;
         let earned = self.earnings_mut(owner);
-        earned.damage += damage;
-        earned.eliminations += elimination;
-        self.player_mut(owner).cash += damage + elimination;
+        earned.damage_income += damage;
+        self.player_mut(owner).cash += damage;
     }
-    pub fn finalise(&mut self, result: MatchState) {
-        if let MatchState::Winner(winner) = result {
-            if self.phase == SessionPhase::Celebrating {
-                return;
-            }
-            self.earnings_mut(winner).winner += ROUND_WIN_BONUS;
-            let player = self.player_mut(winner);
-            player.cash += ROUND_WIN_BONUS;
-            player.wins += 1;
+    /// Placement is supplied by the authoritative turn resolver. An empty order represents a
+    /// draw, which deliberately pays no invented first-place award.
+    pub fn finalise(&mut self, placement_order: &[PlayerId]) {
+        if self.phase == SessionPhase::Celebrating {
+            return;
+        }
+        for (place, player) in placement_order.iter().copied().enumerate() {
+            let award = match place {
+                0 => FIRST_PLACE_AWARD,
+                1 => SECOND_PLACE_AWARD,
+                2 => THIRD_PLACE_AWARD,
+                _ => 0,
+            };
+            self.earnings_mut(player).placement_income += award;
+            self.player_mut(player).cash += award;
         }
         self.phase = SessionPhase::Celebrating;
     }
@@ -151,16 +148,17 @@ mod tests {
     #[test]
     fn actual_opponent_damage_only_is_paid() {
         let mut s = GameSession::new(MatchConfiguration::default().players);
-        s.credit_damage(PlayerId::One, PlayerId::Two, 12, true);
-        s.credit_damage(PlayerId::One, PlayerId::One, 99, true);
-        assert_eq!(s.player(PlayerId::One).cash, 370);
+        s.credit_damage(PlayerId::One, PlayerId::Two, 12);
+        s.credit_damage(PlayerId::One, PlayerId::One, 99);
+        assert_eq!(s.player(PlayerId::One).cash, 120);
     }
     #[test]
-    fn winner_bonus_is_once() {
+    fn placement_awards_are_exact_and_once() {
         let mut s = GameSession::new(MatchConfiguration::default().players);
-        s.finalise(MatchState::Winner(PlayerId::One));
-        s.finalise(MatchState::Winner(PlayerId::One));
-        assert_eq!(s.player(PlayerId::One).cash, 500);
+        s.finalise(&[PlayerId::One, PlayerId::Two]);
+        s.finalise(&[PlayerId::One, PlayerId::Two]);
+        assert_eq!(s.player(PlayerId::One).cash, FIRST_PLACE_AWARD);
+        assert_eq!(s.player(PlayerId::Two).cash, SECOND_PLACE_AWARD);
     }
 
     #[test]
@@ -171,8 +169,8 @@ mod tests {
                 .loadout
                 .select(WeaponId::HighExplosive)
         );
-        s.credit_damage(PlayerId::One, PlayerId::Two, 12, true);
-        s.finalise(MatchState::Winner(PlayerId::One));
+        s.credit_damage(PlayerId::One, PlayerId::Two, 12);
+        s.finalise(&[PlayerId::One, PlayerId::Two]);
         let player = s.player(PlayerId::One).clone();
         s.clear_round_earnings();
         assert_eq!(s.player(PlayerId::One).configuration, player.configuration);
