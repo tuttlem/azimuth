@@ -9,29 +9,16 @@ fidelity. Ridiculous weapons and strange battlefields are welcome when they make
 
 ## Status
 
-First playable local duel. Azimuth renders two distinct tank placeholders on a bounded,
-non-flat, deformable battlefield. Player One and Player Two take deterministic turns: the current
-player either fires one shot or sacrifices that shot to reposition. Movement is six deliberate
-one-unit cardinal steps over current terrain, including craters; steep terrain and battlefield
-edges block a step without spending allowance. Each player retains their own aiming values, so a
-move changes the firing origin and world-space solution without erasing prior knowledge. The boom
-remains presentation only. Terrain impacts deal distance-based splash damage: both tanks begin at
-100 health, blasts reach 6 world units, and a centre hit deals up to 40 damage. A crater that
-removes a living tank's support makes it visibly settle under the configured gravity before the
-turn can advance; it changes the next firing origin without resetting aim and causes no fall
-damage. A tank at zero health is eliminated; the final survivor wins and mutual elimination draws.
-Each match selects one gentle random visible wind condition at startup; it then remains constant,
-so longer shots drift farther while tanks and terrain remain wind-free. Azimuth still has no audio
-content or networking.
+Azimuth is a playable local, multi-round artillery game with configurable human/AI participants,
+deformable terrain, random round starts and terrain, persistent match cash, and a between-round
+weapon shop. Players take deterministic turns to move or fire, while wind, terrain impacts,
+craters, settling tanks, and presentation effects make each battlefield distinct. The game ships
+with spatial fire, impact, and turret-adjustment audio.
 
-Each player begins with an unlimited **Basic Shell**, two **High Explosive** rounds, and two
-**Heavy Shell** rounds. Basic Shell preserves the original 6-unit, 40-damage, 4-by-1.8 crater
-result. HE uses the same deterministic ballistic flight but spends one round to produce an 8-unit,
-60-damage, 6-by-3 crater and a larger presentation boom. Heavy Shell has the ordinary Basic Shell
-impact profile but accepts 40% of horizontal wind acceleration, making it a limited, more stable
-option rather than a mass or drag simulation. Weapon selection and ammunition are independent for
-each player; a fired shot captures its weapon profile before flight, so later HUD/selection changes
-cannot alter it.
+The arsenal now extends beyond the original Basic Shell, High Explosive, and Heavy Shell to include
+weapons such as MIRV, Cluster Bomb, Bomb Net, Roller, Bunker Buster, Dirt Bomb, Curve Ball,
+Bouncer, and Nuke. Weapon selection and ammunition are independent for each player; a fired shot
+captures its weapon profile before flight, so later HUD/selection changes cannot alter it.
 
 ## Prerequisites
 
@@ -138,9 +125,17 @@ development defaults are documented in [docs/projectile-model.md](docs/projectil
 
 ## Automation
 
-Continuous integration has been evaluated and deliberately deferred. The direct local commands
-above provide the current repository-health checks; CI will be reconsidered when hosting or
-collaboration needs establish a concrete benefit.
+Every push to `master` runs the same repository-health policy documented above: formatting,
+warning-denied Clippy, tests, workspace checking, and workspace build validation. After those
+checks pass, the `CI / Build` workflow produces downloadable native artifacts for Windows x86_64,
+Linux x86_64, and macOS arm64. Find them at the bottom of the completed run in the repository's
+**Actions** tab.
+
+Each artifact contains `azimuth-game` (or `azimuth-game.exe`), its required `assets/` directory,
+and a small `BUILD.txt`. Extract it and launch from the package directory; Rust, Cargo, and a
+source checkout are not required. Linux users may need `chmod +x azimuth-game` after extraction
+and need ordinary local graphics/audio driver support. The macOS build is an unsigned Apple-silicon
+binary, so normal Gatekeeper behavior can apply; signing and notarization are not included.
 
 ## Workspace Layout
 

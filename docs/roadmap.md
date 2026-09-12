@@ -78,15 +78,19 @@ The first major gameplay target is:
 
 ## Automation / CI
 
-CI was evaluated during the Project Foundation work and deliberately deferred. Direct local Cargo
-checks currently provide the needed repository-health feedback; revisit CI when hosting or
-collaboration needs create a concrete benefit.
+Hosting and collaboration now make CI useful. Every push to `master` validates the established
+Cargo quality policy before producing downloadable native builds.
 
-* [ ] Decide whether CI is useful at the current project stage.
-* [ ] Add automated build validation if justified.
-* [ ] Add automated tests if justified.
-* [ ] Add formatting checks if justified.
-* [ ] Add Clippy checks if justified.
+* [x] Decide whether CI is useful at the current project stage.
+* [x] Add automated build validation.
+* [x] Add automated tests.
+* [x] Add formatting checks.
+* [x] Add Clippy checks.
+
+### Distribution Builds
+
+* [x] Build native Windows x86_64, Linux x86_64, and macOS arm64 packages after a successful `master` quality gate.
+* [x] Publish the three packages as downloadable artifacts on the corresponding GitHub Actions run.
 
 ---
 

@@ -1,0 +1,162 @@
+name: CI / Build
+
+on:
+  push:
+    branches:
+      - master
+  pull_request:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Select checked-in Rust toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            g++ \
+            pkg-config \
+            libx11-dev \
+            libasound2-dev \
+            libudev-dev \
+            libxkbcommon-x11-0
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Lint
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Build workspace
+        run: cargo build --workspace
+
+  build:
+    name: Build ${{ matrix.platform }} (${{ matrix.architecture }})
+    needs: quality
+    if: github.event_name == 'push'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: windows
+            architecture: x86_64
+            executable: azimuth-game.exe
+            artifact: azimuth-windows-x86_64
+          - os: ubuntu-latest
+            platform: linux
+            architecture: x86_64
+            executable: azimuth-game
+            artifact: azimuth-linux-x86_64
+          - os: macos-14
+            platform: macos
+            architecture: arm64
+            executable: azimuth-game
+            artifact: azimuth-macos-arm64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v7
+
+      - name: Select checked-in Rust toolchain
+        run: |
+          rustup show active-toolchain
+          rustup component add rustfmt clippy
+
+      - name: Restore Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes \
+            g++ \
+            pkg-config \
+            libx11-dev \
+            libasound2-dev \
+            libudev-dev \
+            libxkbcommon-x11-0
+
+      - name: Confirm macOS runner architecture
+        if: matrix.platform == 'macos'
+        run: test "$(uname -m)" = arm64
+
+      - name: Build optimized game
+        run: cargo build --release --package azimuth-game
+
+      - name: Stage and verify package (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $package = '${{ matrix.artifact }}'
+          New-Item -ItemType Directory -Force -Path $package | Out-Null
+          Copy-Item "target/release/${{ matrix.executable }}" -Destination "$package/${{ matrix.executable }}"
+          Copy-Item 'crates/azimuth-game/assets' -Destination "$package/assets" -Recurse
+          @"
+          Azimuth
+          Commit: ${{ github.sha }}
+          Built by GitHub Actions
+          Platform: ${{ matrix.platform }}-${{ matrix.architecture }}
+          "@ | Set-Content -NoNewline -Path "$package/BUILD.txt"
+          $required = @(
+            "$package/${{ matrix.executable }}",
+            "$package/assets/audio/fire.ogg",
+            "$package/assets/audio/impact.ogg",
+            "$package/assets/audio/turret-dink.ogg"
+          )
+          $required | ForEach-Object {
+            if (!(Test-Path $_)) { throw "Missing required package file: $_" }
+          }
+
+      - name: Stage and verify package (Linux/macOS)
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: |
+          package='${{ matrix.artifact }}'
+          mkdir --parents "$package"
+          cp "target/release/${{ matrix.executable }}" "$package/${{ matrix.executable }}"
+          cp -R crates/azimuth-game/assets "$package/assets"
+          cat > "$package/BUILD.txt" <<EOF
+          Azimuth
+          Commit: ${{ github.sha }}
+          Built by GitHub Actions
+          Platform: ${{ matrix.platform }}-${{ matrix.architecture }}
+          EOF
+          test -x "$package/${{ matrix.executable }}"
+          test -f "$package/assets/audio/fire.ogg"
+          test -f "$package/assets/audio/impact.ogg"
+          test -f "$package/assets/audio/turret-dink.ogg"
+
+      - name: Upload package
+        uses: actions/upload-artifact@v7
+        with:
+          name: ${{ matrix.artifact }}
+          path: ${{ matrix.artifact }}
+          if-no-files-found: error
