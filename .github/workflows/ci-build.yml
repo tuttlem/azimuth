@@ -142,7 +142,7 @@ jobs:
         shell: bash
         run: |
           package='${{ matrix.artifact }}'
-          mkdir --parents "$package"
+          mkdir -p "$package"
           cp "target/release/${{ matrix.executable }}" "$package/${{ matrix.executable }}"
           cp -R crates/azimuth-game/assets "$package/assets"
           cat > "$package/BUILD.txt" <<EOF
