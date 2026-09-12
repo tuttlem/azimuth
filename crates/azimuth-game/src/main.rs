@@ -34,7 +34,7 @@ use projectile::{
     Gravity, Projectile, ProjectileAdvance, SimulationLimits, TerrainImpact, Wind,
     azimuth_from_horizontal_direction,
 };
-use session::{GameSession, SessionPhase};
+use session::{GameSession, SessionPhase, weapon_shop_items};
 use tank::{
     HorizontalDirection, MAX_HEALTH, MovementDirection, MovementRejection, PlayerId, Tank,
     TankFiringRepresentation, initial_tanks_for_players_seeded,
@@ -42,7 +42,7 @@ use tank::{
 use turn::{MatchState, TurnPhase, TurnState};
 use weapon::{
     CLUSTER_BOMB_CHILD_COUNT, ContactState, FiredShot, MIRV_CHILD_COUNT, PlayerWeaponLoadouts,
-    WeaponAvailability, WeaponId, weapon_definition,
+    WeaponAvailability, WeaponId, weapon_definition, weapon_price,
 };
 use world::{WorldPosition, WorldVector};
 
@@ -404,6 +404,16 @@ struct SessionFlowOverlay;
 
 #[derive(Component)]
 struct SessionFlowText;
+#[derive(Component)]
+struct ShopPanel;
+#[derive(Component)]
+struct ShopTitle;
+#[derive(Component)]
+struct ShopCardText(WeaponId);
+#[derive(Component)]
+struct ShopBuy(WeaponId);
+#[derive(Component)]
+struct ShopDone;
 
 #[derive(Component)]
 struct ImpactFlashOverlay;
@@ -594,6 +604,7 @@ fn main() {
                 spawn_battlefield_scene,
                 spawn_match_setup,
                 spawn_session_flow_overlay,
+                spawn_shop_overlay,
             ),
         )
         .add_systems(
@@ -632,7 +643,16 @@ fn main() {
             )
                 .chain(),
         )
-        .add_systems(Update, (update_session_flow, sync_session_flow_overlay))
+        .add_systems(
+            Update,
+            (
+                update_session_flow,
+                sync_session_flow_overlay,
+                sync_shop_overlay,
+                handle_shop_input,
+                run_ai_shop,
+            ),
+        )
         .add_systems(
             FixedUpdate,
             (
@@ -987,6 +1007,199 @@ fn spawn_session_flow_overlay(mut commands: Commands) {
         });
 }
 
+fn spawn_shop_overlay(mut commands: Commands) {
+    commands
+        .spawn((
+            ShopPanel,
+            Visibility::Hidden,
+            Node {
+                width: percent(100.0),
+                height: percent(100.0),
+                position_type: PositionType::Absolute,
+                flex_direction: FlexDirection::Column,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                row_gap: px(12),
+                ..default()
+            },
+            BackgroundColor(Color::srgba(0.015, 0.025, 0.05, 0.94)),
+            GlobalZIndex(220),
+        ))
+        .with_children(|root| {
+            root.spawn((
+                ShopTitle,
+                Text::new(""),
+                TextFont {
+                    font_size: 30.0,
+                    ..default()
+                },
+                TextColor(Color::srgb(1.0, 0.82, 0.24)),
+            ));
+            root.spawn((Node {
+                width: px(980),
+                justify_content: JustifyContent::Center,
+                column_gap: px(8),
+                row_gap: px(8),
+                flex_wrap: FlexWrap::Wrap,
+                ..default()
+            },))
+                .with_children(|grid| {
+                    for item in weapon_shop_items() {
+                        grid.spawn((
+                            Node {
+                                width: px(180),
+                                height: px(120),
+                                padding: UiRect::all(px(8)),
+                                flex_direction: FlexDirection::Column,
+                                align_items: AlignItems::Center,
+                                ..default()
+                            },
+                            BackgroundColor(Color::srgba(0.08, 0.12, 0.18, 0.98)),
+                            BorderColor::all(Color::srgb(0.28, 0.42, 0.62)),
+                        ))
+                        .with_children(|card| {
+                            card.spawn((
+                                ShopCardText(item.weapon),
+                                Text::new(""),
+                                TextFont {
+                                    font_size: 15.0,
+                                    ..default()
+                                },
+                                TextColor(Color::WHITE),
+                            ));
+                            card.spawn((
+                                Button,
+                                ShopBuy(item.weapon),
+                                Text::new("BUY"),
+                                TextFont {
+                                    font_size: 16.0,
+                                    ..default()
+                                },
+                                TextColor(Color::srgb(0.1, 0.1, 0.1)),
+                                BackgroundColor(Color::srgb(0.88, 0.66, 0.16)),
+                                Node {
+                                    width: px(92),
+                                    height: px(26),
+                                    justify_content: JustifyContent::Center,
+                                    align_items: AlignItems::Center,
+                                    margin: UiRect::top(px(4)),
+                                    ..default()
+                                },
+                            ));
+                        });
+                    }
+                });
+            root.spawn((
+                Button,
+                ShopDone,
+                Text::new("DONE"),
+                TextFont {
+                    font_size: 20.0,
+                    ..default()
+                },
+                TextColor(Color::WHITE),
+                BackgroundColor(Color::srgb(0.16, 0.48, 0.30)),
+                Node {
+                    width: px(160),
+                    height: px(38),
+                    justify_content: JustifyContent::Center,
+                    align_items: AlignItems::Center,
+                    ..default()
+                },
+            ));
+        });
+}
+
+fn sync_shop_overlay(
+    session: Res<GameSession>,
+    mut panels: Query<&mut Visibility, With<ShopPanel>>,
+    mut title: Query<&mut Text, (With<ShopTitle>, Without<ShopCardText>)>,
+    mut cards: Query<(&ShopCardText, &mut Text)>,
+    mut buys: Query<(&ShopBuy, &mut BackgroundColor)>,
+) {
+    let active = session.active_shop_player();
+    for mut panel in &mut panels {
+        *panel = if session.phase == SessionPhase::Shopping {
+            Visibility::Visible
+        } else {
+            Visibility::Hidden
+        };
+    }
+    let Some(player_id) = active else {
+        return;
+    };
+    let player = session.player(player_id);
+    for mut text in &mut title {
+        text.0 = format!(
+            "{}'S SHOP  ·  CASH ${}",
+            player.configuration.display_name.to_uppercase(),
+            player.cash
+        );
+    }
+    for (card, mut text) in &mut cards {
+        let definition = weapon_definition(card.0);
+        let item = weapon_shop_items()
+            .into_iter()
+            .find(|item| item.weapon == card.0)
+            .expect("shop weapon");
+        let owned = match player.loadout.availability(card.0) {
+            WeaponAvailability::Unlimited => "∞".to_owned(),
+            WeaponAvailability::Remaining(n) => n.to_string(),
+        };
+        let visual = weapon::weapon_presentation(card.0);
+        text.0 = format!(
+            "{}\n{}  {}\nOWNED: {}\n${}",
+            visual.glyph, visual.compact_name, definition.display_name, owned, item.price
+        );
+    }
+    for (buy, mut color) in &mut buys {
+        let price = weapon_price(buy.0).expect("shop weapon");
+        color.0 = if player.cash >= price {
+            Color::srgb(0.88, 0.66, 0.16)
+        } else {
+            Color::srgb(0.25, 0.28, 0.32)
+        };
+    }
+}
+
+fn handle_shop_input(
+    mut writable: ResMut<GameSession>,
+    buys: Query<(&Interaction, &ShopBuy), Changed<Interaction>>,
+    done: Query<&Interaction, (With<ShopDone>, Changed<Interaction>)>,
+) {
+    if writable.phase != SessionPhase::Shopping
+        || writable.active_shop_controller() != Some(ControllerType::Human)
+    {
+        return;
+    }
+    let active = writable.active_shop_player().expect("human shopper");
+    for (interaction, buy) in &buys {
+        if *interaction == Interaction::Pressed {
+            writable.purchase(active, buy.0);
+        }
+    }
+    for interaction in &done {
+        if *interaction == Interaction::Pressed {
+            writable.complete_active_shopper();
+        }
+    }
+}
+
+fn run_ai_shop(mut session: ResMut<GameSession>) {
+    if session.phase != SessionPhase::Shopping
+        || session.active_shop_controller() != Some(ControllerType::Ai)
+    {
+        return;
+    }
+    let player = session.active_shop_player().expect("AI shopper");
+    for weapon in [WeaponId::HighExplosive, WeaponId::Roller] {
+        if !session.purchase(player, weapon) {
+            break;
+        }
+    }
+    session.complete_active_shopper();
+}
+
 fn sync_session_flow_overlay(
     session: Res<GameSession>,
     mut overlays: Query<&mut Visibility, With<SessionFlowOverlay>>,
@@ -1019,16 +1232,7 @@ fn sync_session_flow_overlay(
                 .collect::<Vec<_>>()
                 .join("\n")
         )),
-        SessionPhase::Shopping => Some(format!(
-            "WEAPON SHOP\nROUND {}\nShop purchasing UI is next; press ENTER to start the next round.\n{}",
-            session.round_number + 1,
-            session
-                .players
-                .iter()
-                .map(|p| format!("{}  ${}", p.configuration.display_name, p.cash))
-                .collect::<Vec<_>>()
-                .join("\n")
-        )),
+        SessionPhase::Shopping => None,
     };
     for mut visibility in &mut overlays {
         *visibility = if message.is_some() {
@@ -1509,12 +1713,11 @@ fn update_session_flow(
     if !keyboard.just_pressed(KeyCode::Enter) {
         return;
     }
-    session.phase = match session.phase {
-        SessionPhase::Celebrating => SessionPhase::Accounting,
-        SessionPhase::Accounting => SessionPhase::Shopping,
-        SessionPhase::Shopping => SessionPhase::Transition,
-        phase => phase,
-    };
+    match session.phase {
+        SessionPhase::Celebrating => session.phase = SessionPhase::Accounting,
+        SessionPhase::Accounting => session.begin_shop(),
+        _ => {}
+    }
 }
 
 /// This runs before controllers each rendered frame. It observes already-authoritative resources:
@@ -2280,7 +2483,11 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
                         ))
                         .with_children(|slot| {
                             slot.spawn((
-                                Text::new(weapon_strip_label(weapon)),
+                                Text::new(format!(
+                                    "{}\n{}",
+                                    weapon::weapon_presentation(weapon).glyph,
+                                    weapon_strip_label(weapon)
+                                )),
                                 TextFont {
                                     font_size: 11.0,
                                     ..default()
@@ -2313,37 +2520,11 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
 }
 
 fn weapon_strip_order() -> [WeaponId; 11] {
-    [
-        WeaponId::BasicShell,
-        WeaponId::HighExplosive,
-        WeaponId::HeavyShell,
-        WeaponId::Mirv,
-        WeaponId::ClusterBomb,
-        WeaponId::Roller,
-        WeaponId::BunkerBuster,
-        WeaponId::DirtBomb,
-        WeaponId::CurveBall,
-        WeaponId::Bouncer,
-        WeaponId::Nuke,
-    ]
+    weapon::ACTIVE_WEAPONS
 }
 
 fn weapon_strip_label(weapon: WeaponId) -> &'static str {
-    match weapon {
-        WeaponId::BasicShell => "BASIC",
-        WeaponId::HighExplosive => "HE",
-        WeaponId::HeavyShell => "HEAVY",
-        WeaponId::Mirv => "MIRV",
-        WeaponId::ClusterBomb => "CLSTR",
-        WeaponId::Roller => "ROLL",
-        WeaponId::BunkerBuster => "BUNK",
-        WeaponId::DirtBomb => "DIRT",
-        WeaponId::CurveBall => "CURVE",
-        WeaponId::Bouncer => "BOUNCE",
-        WeaponId::Nuke => "NUKE",
-        #[cfg(test)]
-        WeaponId::TestConventional => "TEST",
-    }
+    weapon::weapon_presentation(weapon).compact_name
 }
 
 fn hud_text(parent: &mut ChildSpawnerCommands, field: HudTextField, size: f32) {

@@ -37,6 +37,94 @@ pub enum WeaponId {
     TestConventional,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WeaponPresentation {
+    pub compact_name: &'static str,
+    pub glyph: &'static str,
+}
+
+/// Presentation is intentionally a small, engine-independent lookup shared by the shop and HUD.
+pub const fn weapon_presentation(id: WeaponId) -> WeaponPresentation {
+    match id {
+        WeaponId::BasicShell => WeaponPresentation {
+            compact_name: "BASIC",
+            glyph: "●",
+        },
+        WeaponId::HighExplosive => WeaponPresentation {
+            compact_name: "HE",
+            glyph: "✹",
+        },
+        WeaponId::HeavyShell => WeaponPresentation {
+            compact_name: "HEAVY",
+            glyph: "⬤",
+        },
+        WeaponId::Mirv => WeaponPresentation {
+            compact_name: "MIRV",
+            glyph: "●↘",
+        },
+        WeaponId::ClusterBomb => WeaponPresentation {
+            compact_name: "CLSTR",
+            glyph: "●··",
+        },
+        WeaponId::Roller => WeaponPresentation {
+            compact_name: "ROLL",
+            glyph: "◉",
+        },
+        WeaponId::BunkerBuster => WeaponPresentation {
+            compact_name: "BUNK",
+            glyph: "│▼",
+        },
+        WeaponId::DirtBomb => WeaponPresentation {
+            compact_name: "DIRT",
+            glyph: "●⌂",
+        },
+        WeaponId::CurveBall => WeaponPresentation {
+            compact_name: "CURVE",
+            glyph: "⌒●",
+        },
+        WeaponId::Bouncer => WeaponPresentation {
+            compact_name: "BOUNCE",
+            glyph: "╱●╲",
+        },
+        WeaponId::Nuke => WeaponPresentation {
+            compact_name: "NUKE",
+            glyph: "☢",
+        },
+        #[cfg(test)]
+        WeaponId::TestConventional => WeaponPresentation {
+            compact_name: "TEST",
+            glyph: "?",
+        },
+    }
+}
+
+pub const ACTIVE_WEAPONS: [WeaponId; 11] = [
+    WeaponId::BasicShell,
+    WeaponId::HighExplosive,
+    WeaponId::HeavyShell,
+    WeaponId::Mirv,
+    WeaponId::ClusterBomb,
+    WeaponId::Roller,
+    WeaponId::BunkerBuster,
+    WeaponId::DirtBomb,
+    WeaponId::CurveBall,
+    WeaponId::Bouncer,
+    WeaponId::Nuke,
+];
+
+pub const SHOP_WEAPONS: [WeaponId; 10] = [
+    WeaponId::HighExplosive,
+    WeaponId::HeavyShell,
+    WeaponId::Mirv,
+    WeaponId::ClusterBomb,
+    WeaponId::Roller,
+    WeaponId::BunkerBuster,
+    WeaponId::DirtBomb,
+    WeaponId::CurveBall,
+    WeaponId::Bouncer,
+    WeaponId::Nuke,
+];
+
 /// Prices deliberately live beside the weapon catalogue: the shop is ammunition-only, and the
 /// unlimited Basic Shell must never become a finite purchase.
 pub const fn weapon_price(id: WeaponId) -> Option<u32> {

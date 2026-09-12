@@ -1167,6 +1167,15 @@ These are conceptual milestones rather than fixed specification sequences.
 * [x] At least one ridiculous weapon exists.
 * [x] Weapon selection creates meaningful tactical choices.
 
+## Economy and Between-Round Shop
+
+* [x] Session-level player cash, actual-damage income, and placement awards.
+* [x] Round accounting presentation.
+* [x] Sequential between-round Human shopping with persistent weapon ammunition.
+* [x] Bounded automatic AI shopping.
+* [x] Per-weapon prices and a visual product catalogue shared with battlefield inventory.
+* [ ] Armour as a future Shop category; its rules remain to be designed.
+
 ## Milestone H — Complete Match Experience
 
 * [x] Match setup exists.

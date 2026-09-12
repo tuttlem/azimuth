@@ -11,7 +11,9 @@ fidelity. Ridiculous weapons and strange battlefields are welcome when they make
 
 Azimuth is a playable local, multi-round artillery game with configurable human/AI participants,
 deformable terrain, random round starts and terrain, persistent match cash, and a between-round
-weapon shop. Players take deterministic turns to move or fire, while wind, terrain impacts,
+weapon shop. Each player can spend round winnings on persistent ammunition before the next round;
+the visual weapon cards in the shop and battle strip share compact labels, icons, and ammunition
+state. Players take deterministic turns to move or fire, while wind, terrain impacts,
 craters, settling tanks, and presentation effects make each battlefield distinct. The game ships
 with spatial fire, impact, and turret-adjustment audio.
 

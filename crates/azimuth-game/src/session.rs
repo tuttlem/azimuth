@@ -1,7 +1,7 @@
 use crate::{
-    match_setup::PlayerConfiguration,
+    match_setup::{ControllerType, PlayerConfiguration},
     tank::PlayerId,
-    weapon::{PlayerWeaponLoadout, WeaponId, weapon_price},
+    weapon::{PlayerWeaponLoadout, SHOP_WEAPONS, WeaponId, weapon_price},
 };
 use bevy::prelude::Resource;
 
@@ -18,6 +18,27 @@ pub enum SessionPhase {
     Accounting,
     Shopping,
     Transition,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ShopCategory {
+    Weapons,
+    Armour,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ShopItem {
+    pub category: ShopCategory,
+    pub weapon: WeaponId,
+    pub price: u32,
+}
+
+pub fn weapon_shop_items() -> [ShopItem; 10] {
+    SHOP_WEAPONS.map(|weapon| ShopItem {
+        category: ShopCategory::Weapons,
+        weapon,
+        price: weapon_price(weapon).expect("limited shop weapon has price"),
+    })
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -45,6 +66,7 @@ pub struct GameSession {
     pub round_number: u32,
     pub phase: SessionPhase,
     pub earnings: Vec<(PlayerId, RoundEarnings)>,
+    pub shop_index: usize,
 }
 impl GameSession {
     pub fn new(players: Vec<PlayerConfiguration>) -> Self {
@@ -65,6 +87,7 @@ impl GameSession {
             round_number: 1,
             phase: SessionPhase::Playing,
             earnings,
+            shop_index: 0,
         }
     }
     pub fn player(&self, id: PlayerId) -> &SessionPlayer {
@@ -115,6 +138,9 @@ impl GameSession {
         self.phase = SessionPhase::Celebrating;
     }
     pub fn purchase(&mut self, player: PlayerId, weapon: WeaponId) -> bool {
+        if self.phase != SessionPhase::Shopping || self.active_shop_player() != Some(player) {
+            return false;
+        }
         let Some(price) = weapon_price(weapon) else {
             return false;
         };
@@ -128,6 +154,30 @@ impl GameSession {
         } else {
             false
         }
+    }
+    pub fn begin_shop(&mut self) {
+        self.phase = SessionPhase::Shopping;
+        self.shop_index = 0;
+    }
+    pub fn active_shop_player(&self) -> Option<PlayerId> {
+        self.players
+            .get(self.shop_index)
+            .map(|player| player.configuration.id)
+    }
+    pub fn active_shop_controller(&self) -> Option<ControllerType> {
+        self.players
+            .get(self.shop_index)
+            .map(|player| player.configuration.controller)
+    }
+    pub fn complete_active_shopper(&mut self) -> bool {
+        if self.phase != SessionPhase::Shopping || self.shop_index >= self.players.len() {
+            return false;
+        }
+        self.shop_index += 1;
+        if self.shop_index == self.players.len() {
+            self.phase = SessionPhase::Transition;
+        }
+        true
     }
 
     /// Earnings explain one completed round; balances, wins, identities, and ammunition belong
@@ -144,7 +194,7 @@ impl GameSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::match_setup::MatchConfiguration;
+    use crate::{match_setup::MatchConfiguration, weapon::WeaponAvailability};
     #[test]
     fn actual_opponent_damage_only_is_paid() {
         let mut s = GameSession::new(MatchConfiguration::default().players);
@@ -191,5 +241,60 @@ mod tests {
                 .iter()
                 .all(|(_, earnings)| *earnings == RoundEarnings::default())
         );
+    }
+
+    #[test]
+    fn shop_purchase_is_atomic_and_player_scoped() {
+        let mut session = GameSession::new(MatchConfiguration::default().players);
+        session.player_mut(PlayerId::One).cash = 600;
+        session.begin_shop();
+        let before = session
+            .player(PlayerId::One)
+            .loadout
+            .availability(WeaponId::Mirv);
+        assert!(session.purchase(PlayerId::One, WeaponId::Mirv));
+        assert_eq!(session.player(PlayerId::One).cash, 0);
+        assert_eq!(
+            session
+                .player(PlayerId::One)
+                .loadout
+                .availability(WeaponId::Mirv),
+            WeaponAvailability::Remaining(3)
+        );
+        assert_eq!(before, WeaponAvailability::Remaining(2));
+        assert!(!session.purchase(PlayerId::One, WeaponId::HighExplosive));
+        assert!(!session.purchase(PlayerId::Two, WeaponId::HighExplosive));
+        assert_eq!(
+            session
+                .player(PlayerId::Two)
+                .loadout
+                .availability(WeaponId::HighExplosive),
+            WeaponAvailability::Remaining(2)
+        );
+    }
+
+    #[test]
+    fn shop_visits_every_configured_player_then_transitions() {
+        let mut session = GameSession::new(MatchConfiguration::default().players);
+        session.begin_shop();
+        assert_eq!(session.active_shop_player(), Some(PlayerId::One));
+        assert!(session.complete_active_shopper());
+        assert_eq!(session.active_shop_player(), Some(PlayerId::Two));
+        assert!(session.complete_active_shopper());
+        assert_eq!(session.phase, SessionPhase::Transition);
+        assert!(!session.complete_active_shopper());
+    }
+
+    #[test]
+    fn shop_catalogue_has_every_limited_weapon_and_never_basic() {
+        let items = weapon_shop_items();
+        assert_eq!(items.len(), 10);
+        assert!(
+            items
+                .iter()
+                .all(|item| item.category == ShopCategory::Weapons && item.price > 0)
+        );
+        assert!(items.iter().all(|item| item.weapon != WeaponId::BasicShell));
+        assert!(items.iter().any(|item| item.weapon == WeaponId::Nuke));
     }
 }
