@@ -74,7 +74,7 @@ docs/roadmap.md                   # Automation / CI completion and distribution 
 ## Implementation Approach
 
 1. Create `.github/workflows/ci-build.yml` named `CI / Build`, with minimal read-only permissions and `push`/`pull_request` triggers scoped to `master`.
-2. Add Linux `quality`: check out revision, install `rust-toolchain.toml` policy, restore a Cargo cache keyed by OS/toolchain/`Cargo.lock`, install only current Bevy Linux development packages, then run the five documented health commands.
+2. Add Linux `quality`: check out revision, install `rust-toolchain.toml` policy, restore a Cargo cache keyed by OS/toolchain/`Cargo.lock`, install only current Bevy Linux development packages (including Wayland development files required by enabled Bevy features), then run the five documented health commands.
 3. Add `build` requiring `quality`, restricted to pushes, with explicit `windows-latest`/x86_64, `ubuntu-latest`/x86_64, and `macos-14`/arm64 entries.
 4. Release-build `azimuth-game`; stage only `target/release/azimuth-game[.exe]`, `crates/azimuth-game/assets`, and optional `BUILD.txt` in an artifact-named directory. Verify executable and required audio paths before upload.
 5. Upload directories as `azimuth-windows-x86_64`, `azimuth-linux-x86_64`, and `azimuth-macos-arm64`. Actions artifacts are the download container—no independent archives.

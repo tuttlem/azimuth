@@ -37,6 +37,7 @@ jobs:
             libx11-dev \
             libasound2-dev \
             libudev-dev \
+            libwayland-dev \
             libxkbcommon-x11-0
 
       - name: Check formatting
@@ -102,6 +103,7 @@ jobs:
             libx11-dev \
             libasound2-dev \
             libudev-dev \
+            libwayland-dev \
             libxkbcommon-x11-0
 
       - name: Confirm macOS runner architecture

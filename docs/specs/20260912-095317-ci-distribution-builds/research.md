@@ -20,7 +20,7 @@
 
 ## Decision: only current Bevy 0.18.1 Ubuntu development dependencies
 
-**Rationale**: With Bevy default native windowing/audio features, Ubuntu compilation needs `g++`, `pkg-config`, `libx11-dev`, `libasound2-dev`, `libudev-dev`, and `libxkbcommon-x11-0`. CI compiles but does not launch a graphical game.
+**Rationale**: With Bevy default native windowing/audio features, Ubuntu compilation needs `g++`, `pkg-config`, `libx11-dev`, `libasound2-dev`, `libudev-dev`, `libwayland-dev`, and `libxkbcommon-x11-0`. `libwayland-dev` supplies the `wayland-client.pc` file required by Bevy's enabled `wayland-sys` dependency. CI compiles but does not launch a graphical game.
 
 **Alternatives considered**: Broad desktop meta-packages obscure requirements. Virtual-display launching is beyond the compile/package goal and no clean headless launch mechanism exists.
 
