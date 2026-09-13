@@ -6,6 +6,9 @@ pub const HALF_EXTENT: f32 = 60.0;
 /// A coarse, render-only skirt reaches far enough to conceal the playable square's edge without
 /// changing the 120-unit gameplay world or multiplying the mutable terrain mesh.
 pub const HORIZON_HALF_EXTENT: f32 = 180.0;
+/// A gentle render-only drop across the exterior skirt suggests a broad curved horizon without
+/// changing the square, authoritative battlefield beneath it.
+const HORIZON_CURVATURE_DROP: f32 = 3.5;
 /// Physical scale and sample density are deliberately separate. This keeps existing craters and
 /// one-unit positioning readable without multiplying mesh density with the map's area.
 pub const TERRAIN_CELLS_PER_SIDE: usize = 64;
@@ -59,7 +62,11 @@ impl VisualHorizon {
                 let z = inner_z + (outer_z - inner_z) * fraction;
                 let inner_height = terrain.height(*inner_x, *inner_z);
                 let outer_height = generated_height(*outer_x, *outer_z, seed);
-                let height = inner_height + (outer_height - inner_height) * fraction;
+                // Keep the inner ring exactly welded to the mutable terrain, then let the
+                // exterior fall away very gently so the surrounding plane reads as a distant
+                // planetary surface rather than a perfectly flat tabletop.
+                let height = inner_height + (outer_height - inner_height) * fraction
+                    - HORIZON_CURVATURE_DROP * smoothstep(fraction);
                 positions.push([x, height, z]);
                 colours.push(blend_colour(
                     surface_colour(inner_height, *inner_x, *inner_z),

@@ -29,6 +29,30 @@ pub enum ControllerType {
     Human,
     Ai,
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum AiDifficulty {
+    Easy,
+    #[default]
+    Normal,
+    Hard,
+}
+impl AiDifficulty {
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Easy => "Easy",
+            Self::Normal => "Normal",
+            Self::Hard => "Hard",
+        }
+    }
+
+    pub const fn next(self) -> Self {
+        match self {
+            Self::Easy => Self::Normal,
+            Self::Normal => Self::Hard,
+            Self::Hard => Self::Easy,
+        }
+    }
+}
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PlayerVisualIdentity {
     Red,
@@ -70,6 +94,7 @@ pub struct PlayerConfiguration {
     pub id: PlayerId,
     pub display_name: String,
     pub controller: ControllerType,
+    pub ai_difficulty: AiDifficulty,
     pub visual: PlayerVisualIdentity,
     /// Retained while an AI name is shown, so switching back to Human restores the edit.
     human_name: String,
@@ -108,6 +133,7 @@ impl MatchConfiguration {
             id: PlayerId(number as u8),
             display_name: human_name.clone(),
             controller: ControllerType::Human,
+            ai_difficulty: AiDifficulty::Normal,
             visual: PlayerVisualIdentity::ALL[number - 1],
             human_name,
         }
@@ -205,6 +231,18 @@ impl MatchConfiguration {
                 .display_name = name;
         }
     }
+    pub fn cycle_ai_difficulty(&mut self, id: PlayerId) -> bool {
+        let player = self
+            .players
+            .iter_mut()
+            .find(|player| player.id == id)
+            .expect("configured player exists");
+        if player.controller != ControllerType::Ai {
+            return false;
+        }
+        player.ai_difficulty = player.ai_difficulty.next();
+        true
+    }
     fn next_ai_name(&mut self, id: PlayerId) -> String {
         let used: Vec<_> = self
             .players
@@ -289,6 +327,22 @@ mod tests {
         configuration.set_controller(id, ControllerType::Ai);
         configuration.set_controller(id, ControllerType::Human);
         assert_eq!(configuration.players[0].display_name, "Ada");
+    }
+
+    #[test]
+    fn ai_difficulty_defaults_cycles_and_survives_controller_changes() {
+        let mut configuration = MatchConfiguration::default();
+        let id = configuration.players[0].id;
+        assert_eq!(configuration.players[0].ai_difficulty, AiDifficulty::Normal);
+        assert!(!configuration.cycle_ai_difficulty(id));
+        configuration.set_controller(id, ControllerType::Ai);
+        assert!(configuration.cycle_ai_difficulty(id));
+        assert_eq!(configuration.players[0].ai_difficulty, AiDifficulty::Hard);
+        assert!(configuration.cycle_ai_difficulty(id));
+        assert_eq!(configuration.players[0].ai_difficulty, AiDifficulty::Easy);
+        configuration.set_controller(id, ControllerType::Human);
+        configuration.set_controller(id, ControllerType::Ai);
+        assert_eq!(configuration.players[0].ai_difficulty, AiDifficulty::Easy);
     }
 
     #[test]

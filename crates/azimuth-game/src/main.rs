@@ -13,7 +13,7 @@ mod world;
 
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use ai::decide_firing;
+use ai::{decide_firing_with_terrain, planned_shop_purchases};
 use aiming::{AimAdjustment, AimingState};
 use battlefield::{
     BattlefieldSeed, BattlefieldTerrain, BuildingPlacement, HALF_EXTENT, VisualHorizon,
@@ -1040,7 +1040,7 @@ fn spawn_match_setup(mut commands: Commands) {
                 ));
                 setup_text(
                     panel,
-                    "2-8: COUNT | UP/DOWN: SLOT | TYPE: NAME | TAB: HUMAN/AI | CTRL+R: REROLL AI",
+                    "2-8: COUNT | UP/DOWN: SLOT | TYPE: NAME | TAB: HUMAN/AI | D: AI LEVEL | CTRL+R: REROLL AI",
                     16.0,
                     UI_MUTED,
                 );
@@ -1351,10 +1351,14 @@ fn run_ai_shop(mut session: ResMut<GameSession>) {
         return;
     }
     let player = session.active_shop_player().expect("AI shopper");
-    for weapon in [WeaponId::HighExplosive, WeaponId::Roller] {
-        if !session.purchase(player, weapon) {
-            break;
-        }
+    let shopper = session.player(player);
+    let purchases = planned_shop_purchases(
+        shopper.configuration.ai_difficulty,
+        shopper.cash,
+        shopper.loadout,
+    );
+    for weapon in purchases {
+        session.purchase(player, weapon);
     }
     session.complete_active_shopper();
 }
@@ -1481,6 +1485,10 @@ fn update_match_setup(
         };
         configuration.0.set_controller(id, controller);
     }
+    let selected_id = configuration.0.players[gate.selected_slot].id;
+    if keyboard.just_pressed(KeyCode::KeyD) {
+        configuration.0.cycle_ai_difficulty(selected_id);
+    }
     if control_held && keyboard.just_pressed(KeyCode::KeyR) {
         let id = configuration.0.players[gate.selected_slot].id;
         configuration.0.reroll_ai_name(id);
@@ -1505,11 +1513,16 @@ fn update_match_setup(
                 " "
             };
             format!(
-                "{marker} {}. [{}] {}    {:?}",
+                "{marker} {}. [{}] {}    {:?}{}",
                 index + 1,
                 player.visual.label(),
                 player.display_name,
-                player.controller
+                player.controller,
+                if player.controller == ControllerType::Ai {
+                    format!(" ({})", player.ai_difficulty.label())
+                } else {
+                    String::new()
+                }
             )
             .to_uppercase()
         })
@@ -1987,6 +2000,8 @@ fn run_ai_controller(
     configuration: Res<PendingMatchConfiguration>,
     presentation: Res<ShotPresentation>,
     tanks: Res<Tanks>,
+    terrain: Res<BattlefieldState>,
+    wind: Res<BattlefieldWind>,
     assets: Res<ProjectileVisualAssets>,
     audio: Res<AudioAssets>,
     mut seed: ResMut<AiDecisionSeed>,
@@ -2003,7 +2018,22 @@ fn run_ai_controller(
         return;
     }
     let actor = turn.0.current_player;
-    let Some(decision) = decide_firing(&mut seed.0, actor, &tanks.0) else {
+    let difficulty = configuration
+        .0
+        .players
+        .iter()
+        .find(|player| player.id == actor)
+        .expect("active player is configured")
+        .ai_difficulty;
+    let Some(decision) = decide_firing_with_terrain(
+        &mut seed.0,
+        actor,
+        difficulty,
+        &tanks.0,
+        weapons.0.for_player(actor),
+        wind.0,
+        &terrain.0,
+    ) else {
         return;
     };
     if !turn.0.set_current_aim(decision.aim)

@@ -2,8 +2,8 @@ use crate::battlefield::{BattlefieldTerrain, HALF_EXTENT, is_dry_and_gentle, is_
 use crate::projectile::{FIXED_STEP_SECONDS, Gravity};
 use crate::world::{WorldPosition, WorldVector};
 
-const FIRING_ORIGIN_FORWARD_OFFSET: f32 = 2.1;
-const FIRING_ORIGIN_HEIGHT: f32 = 1.0;
+pub const FIRING_ORIGIN_FORWARD_OFFSET: f32 = 2.1;
+pub const FIRING_ORIGIN_HEIGHT: f32 = 1.0;
 pub const MOVEMENT_STEP_DISTANCE: f32 = 1.0;
 pub const MAX_HEALTH: u8 = 100;
 pub const SUPPORT_TOLERANCE: f32 = 0.05;

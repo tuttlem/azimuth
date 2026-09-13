@@ -784,7 +784,7 @@ It does not need to behave like a sophisticated military planner.
 ## Basic AI
 
 * [x] Select targets.
-* [ ] Choose weapon.
+* [x] Choose weapon.
 * [x] Choose azimuth.
 * [x] Choose elevation.
 * [x] Choose firing power.
@@ -795,13 +795,13 @@ It does not need to behave like a sophisticated military planner.
 
 Potential skill differences:
 
-* [ ] Aim error.
+* [x] Aim error.
 * [ ] Memory of previous shots.
 * [ ] Ability to bracket targets.
-* [ ] Wind compensation ability.
+* [x] Wind compensation ability.
 * [ ] Environmental understanding.
 * [ ] Tactical movement ability.
-* [ ] Weapon-selection quality.
+* [x] Weapon-selection quality.
 
 ## AI Personality
 
