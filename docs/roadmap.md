@@ -916,6 +916,12 @@ remaining HUD usability work complete.
 * [ ] Avoid clutter.
 * [ ] Preserve focus on battlefield action.
 
+Implementation note (2026-09-12): UI polish now gives the shared HUD and shop a single
+arcade-artillery palette, graphical per-weapon inventory/product artwork, selected and depleted
+weapon treatment, shop affordability feedback, and themed setup/result/accounting surfaces. The
+remaining usability boxes require the recorded graphical 2-, 4-, and 8-player/resolution manual
+acceptance before they can honestly be closed.
+
 ---
 
 # 23. Audio
@@ -942,6 +948,10 @@ Implementation note (2026-09-10): Basic, High Explosive, and Heavy Shell launche
 shared successful-fire boundary for an audible report, and resolved terrain impacts produce one
 scaled explosion cue. Azimuth/elevation adjustments also have restrained mechanical feedback.
 Projectile flight, wind ambience, destruction, UI, and terrain/debris audio remain open.
+
+Implementation note (2026-09-12): successful weapon purchases now reuse the restrained mechanical
+control click, keeping UI feedback subordinate to artillery audio. Dedicated UI-sound acceptance
+remains open pending graphical/manual tuning.
 
 ---
 
@@ -1195,6 +1205,10 @@ These are conceptual milestones rather than fixed specification sequences.
 * [ ] More capable AI.
 * [ ] Additional match options.
 * [ ] Performance tuning based on measurement.
+
+Implementation note (2026-09-12): original source-owned weapon artwork and the shared UI theme
+are now used by both battlefield inventory and the between-round shop. Broader visual milestones
+remain intentionally open until the graphical acceptance matrix is completed.
 
 ## Milestone J — Optional Future Expansion
 

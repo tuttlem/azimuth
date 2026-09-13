@@ -217,6 +217,11 @@ mod tests {
         assert!(
             s.player_mut(PlayerId::One)
                 .loadout
+                .add_round(WeaponId::HighExplosive)
+        );
+        assert!(
+            s.player_mut(PlayerId::One)
+                .loadout
                 .select(WeaponId::HighExplosive)
         );
         s.credit_damage(PlayerId::One, PlayerId::Two, 12);
@@ -246,7 +251,7 @@ mod tests {
     #[test]
     fn shop_purchase_is_atomic_and_player_scoped() {
         let mut session = GameSession::new(MatchConfiguration::default().players);
-        session.player_mut(PlayerId::One).cash = 600;
+        session.player_mut(PlayerId::One).cash = 6_000;
         session.begin_shop();
         let before = session
             .player(PlayerId::One)
@@ -259,9 +264,9 @@ mod tests {
                 .player(PlayerId::One)
                 .loadout
                 .availability(WeaponId::Mirv),
-            WeaponAvailability::Remaining(3)
+            WeaponAvailability::Remaining(1)
         );
-        assert_eq!(before, WeaponAvailability::Remaining(2));
+        assert_eq!(before, WeaponAvailability::Remaining(0));
         assert!(!session.purchase(PlayerId::One, WeaponId::HighExplosive));
         assert!(!session.purchase(PlayerId::Two, WeaponId::HighExplosive));
         assert_eq!(
@@ -269,7 +274,7 @@ mod tests {
                 .player(PlayerId::Two)
                 .loadout
                 .availability(WeaponId::HighExplosive),
-            WeaponAvailability::Remaining(2)
+            WeaponAvailability::Remaining(0)
         );
     }
 

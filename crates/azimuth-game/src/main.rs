@@ -92,6 +92,28 @@ const MAX_ACTIVE_SMOKE_PUFFS: usize = 32;
 const MAX_PENDING_IMPACT_EFFECTS: usize = 64;
 const PARTICLE_GRAVITY: f32 = 7.0;
 
+// A deliberately small visual language: these values are shared by the HUD and every overlay,
+// but layouts remain local so this does not become a CSS framework in Rust.
+const UI_OVERLAY: Color = Color::srgba(0.015, 0.025, 0.05, 0.90);
+const UI_PANEL: Color = Color::srgba(0.035, 0.065, 0.105, 0.94);
+const UI_ELEVATED: Color = Color::srgba(0.075, 0.12, 0.18, 0.98);
+const UI_BORDER: Color = Color::srgb(0.28, 0.46, 0.66);
+const UI_ACCENT: Color = Color::srgb(1.0, 0.72, 0.18);
+const UI_TEXT: Color = Color::srgb(0.94, 0.92, 0.82);
+const UI_MUTED: Color = Color::srgb(0.53, 0.62, 0.70);
+const UI_DISABLED: Color = Color::srgb(0.22, 0.26, 0.30);
+const UI_SUCCESS: Color = Color::srgb(0.18, 0.58, 0.36);
+
+fn ui_button_shadow() -> BoxShadow {
+    BoxShadow::new(
+        Color::srgba(0.0, 0.0, 0.0, 0.48),
+        px(0),
+        px(3),
+        px(0),
+        px(3),
+    )
+}
+
 #[derive(Component)]
 struct BattlefieldCamera {
     target: Vec3,
@@ -183,7 +205,7 @@ struct AimRepeatState {
     keys: [AimKeyRepeat; 6],
 }
 
-#[derive(Resource)]
+#[derive(Resource, Clone)]
 struct Tanks(Vec<Tank>);
 
 #[derive(Resource)]
@@ -294,6 +316,23 @@ struct AudioAssets {
     fire: Handle<AudioSource>,
     impact: Handle<AudioSource>,
     turret_dink: Handle<AudioSource>,
+    purchase: Handle<AudioSource>,
+}
+
+/// Bevy handles stay at the presentation boundary; `weapon::WeaponPresentation` only exposes
+/// stable paths so the same artwork can be used by both the HUD and shop.
+#[derive(Resource, Clone)]
+struct WeaponIconAssets {
+    icons: std::collections::HashMap<WeaponId, Handle<Image>>,
+}
+
+impl WeaponIconAssets {
+    fn icon(&self, weapon: WeaponId) -> Handle<Image> {
+        self.icons
+            .get(&weapon)
+            .cloned()
+            .unwrap_or_else(|| panic!("missing required UI icon for {weapon:?}"))
+    }
 }
 
 #[derive(Resource, Default)]
@@ -514,6 +553,12 @@ type HudDecorations<'w, 's> = Query<
         Without<WeaponSlot>,
     ),
 >;
+type ShopDoneInteractions<'w, 's> = Query<
+    'w,
+    's,
+    (&'static Interaction, &'static mut BackgroundColor),
+    (With<ShopDone>, Without<ShopBuy>),
+>;
 type TankMuzzleTransforms<'w, 's> = Query<
     'w,
     's,
@@ -601,11 +646,13 @@ fn main() {
         .add_systems(
             Startup,
             (
+                load_weapon_icons,
                 spawn_battlefield_scene,
                 spawn_match_setup,
                 spawn_session_flow_overlay,
                 spawn_shop_overlay,
-            ),
+            )
+                .chain(),
         )
         .add_systems(
             Update,
@@ -671,6 +718,7 @@ fn spawn_battlefield_scene(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     asset_server: Res<AssetServer>,
+    icons: Res<WeaponIconAssets>,
     scene: BattlefieldSceneResources,
 ) {
     let (tanks, turn, terrain, dressing, match_seed, configuration) = scene;
@@ -691,6 +739,7 @@ fn spawn_battlefield_scene(
         fire: asset_server.load("audio/fire.ogg"),
         impact: asset_server.load("audio/impact.ogg"),
         turret_dink: asset_server.load("audio/turret-dink.ogg"),
+        purchase: asset_server.load("audio/ui-purchase.ogg"),
     });
     spawn_wind_indicator_overlay(&mut commands, &mut meshes, &mut materials);
 
@@ -797,7 +846,7 @@ fn spawn_battlefield_scene(
         );
     }
 
-    spawn_tactical_hud(&mut commands, &configuration.0.players);
+    spawn_tactical_hud(&mut commands, &configuration.0.players, &icons);
 
     commands.insert_resource(ProjectileVisualAssets {
         mesh: meshes.add(Sphere::new(0.28)),
@@ -845,6 +894,22 @@ fn spawn_battlefield_scene(
             perceptual_roughness: 0.95,
             ..default()
         }),
+    });
+}
+
+/// Load once at startup so overlays and the rebuilt HUD share the exact same handles. The lookup
+/// is deliberately validated by `WeaponIconAssets::icon` instead of allowing blank UI controls.
+fn load_weapon_icons(mut commands: Commands, asset_server: Res<AssetServer>) {
+    commands.insert_resource(WeaponIconAssets {
+        icons: weapon::ACTIVE_WEAPONS
+            .into_iter()
+            .map(|weapon| {
+                (
+                    weapon,
+                    asset_server.load(weapon::weapon_presentation(weapon).icon_path),
+                )
+            })
+            .collect(),
     });
 }
 
@@ -930,7 +995,7 @@ fn spawn_match_setup(mut commands: Commands) {
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.02, 0.03, 0.06, 0.88)),
+            BackgroundColor(UI_OVERLAY),
             Pickable::IGNORE,
         ))
         .with_children(|root| {
@@ -943,15 +1008,15 @@ fn spawn_match_setup(mut commands: Commands) {
                     border: UiRect::all(px(2.0)),
                     ..default()
                 },
-                BackgroundColor(Color::srgba(0.05, 0.09, 0.14, 0.98)),
-                BorderColor::all(Color::srgb(0.9, 0.75, 0.2)),
+                BackgroundColor(UI_PANEL),
+                BorderColor::all(UI_ACCENT),
             ))
             .with_children(|panel| {
                 setup_text(
                     panel,
-                    "AZIMUTH — MATCH SETUP",
+                    "AZIMUTH - MATCH SETUP",
                     30.0,
-                    Color::srgb(0.95, 0.8, 0.25),
+                    UI_ACCENT,
                 );
                 panel.spawn((
                     MatchSetupDetails,
@@ -960,19 +1025,19 @@ fn spawn_match_setup(mut commands: Commands) {
                         font_size: 18.0,
                         ..default()
                     },
-                    TextColor(Color::WHITE),
+                    TextColor(UI_TEXT),
                 ));
                 setup_text(
                     panel,
-                    "2–8: COUNT | UP/DOWN: SLOT | TYPE: NAME | CTRL+C: HUMAN/AI | CTRL+R: REROLL AI",
+                    "2-8: COUNT | UP/DOWN: SLOT | TYPE: NAME | CTRL+C: HUMAN/AI | CTRL+R: REROLL AI",
                     16.0,
-                    Color::srgb(0.6, 0.75, 0.9),
+                    UI_MUTED,
                 );
                 setup_text(
                     panel,
                     "PRESS ENTER TO START MATCH",
                     18.0,
-                    Color::srgb(0.95, 0.8, 0.25),
+                    UI_ACCENT,
                 );
             });
         });
@@ -991,7 +1056,7 @@ fn spawn_session_flow_overlay(mut commands: Commands) {
                 align_items: AlignItems::Center,
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.02, 0.03, 0.06, 0.80)),
+            BackgroundColor(UI_OVERLAY),
             GlobalZIndex(200),
         ))
         .with_children(|root| {
@@ -1002,12 +1067,12 @@ fn spawn_session_flow_overlay(mut commands: Commands) {
                     font_size: 28.0,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 0.82, 0.24)),
+                TextColor(UI_ACCENT),
             ));
         });
 }
 
-fn spawn_shop_overlay(mut commands: Commands) {
+fn spawn_shop_overlay(mut commands: Commands, icons: Res<WeaponIconAssets>) {
     commands
         .spawn((
             ShopPanel,
@@ -1022,7 +1087,7 @@ fn spawn_shop_overlay(mut commands: Commands) {
                 row_gap: px(12),
                 ..default()
             },
-            BackgroundColor(Color::srgba(0.015, 0.025, 0.05, 0.94)),
+            BackgroundColor(UI_OVERLAY),
             GlobalZIndex(220),
         ))
         .with_children(|root| {
@@ -1030,13 +1095,14 @@ fn spawn_shop_overlay(mut commands: Commands) {
                 ShopTitle,
                 Text::new(""),
                 TextFont {
-                    font_size: 30.0,
+                    font_size: 34.0,
                     ..default()
                 },
-                TextColor(Color::srgb(1.0, 0.82, 0.24)),
+                TextColor(UI_ACCENT),
             ));
             root.spawn((Node {
-                width: px(980),
+                width: percent(92.0),
+                max_width: px(1120),
                 justify_content: JustifyContent::Center,
                 column_gap: px(8),
                 row_gap: px(8),
@@ -1047,17 +1113,27 @@ fn spawn_shop_overlay(mut commands: Commands) {
                     for item in weapon_shop_items() {
                         grid.spawn((
                             Node {
-                                width: px(180),
-                                height: px(120),
-                                padding: UiRect::all(px(8)),
+                                width: px(200),
+                                height: px(246),
+                                padding: UiRect::all(px(12)),
+                                border_radius: BorderRadius::all(px(10)),
                                 flex_direction: FlexDirection::Column,
                                 align_items: AlignItems::Center,
                                 ..default()
                             },
-                            BackgroundColor(Color::srgba(0.08, 0.12, 0.18, 0.98)),
-                            BorderColor::all(Color::srgb(0.28, 0.42, 0.62)),
+                            BackgroundColor(UI_ELEVATED),
+                            BorderColor::all(UI_BORDER),
                         ))
                         .with_children(|card| {
+                            card.spawn((
+                                ImageNode::new(icons.icon(item.weapon)),
+                                Node {
+                                    width: px(116),
+                                    height: px(104),
+                                    margin: UiRect::bottom(px(4)),
+                                    ..default()
+                                },
+                            ));
                             card.spawn((
                                 ShopCardText(item.weapon),
                                 Text::new(""),
@@ -1065,7 +1141,7 @@ fn spawn_shop_overlay(mut commands: Commands) {
                                     font_size: 15.0,
                                     ..default()
                                 },
-                                TextColor(Color::WHITE),
+                                TextColor(UI_TEXT),
                             ));
                             card.spawn((
                                 Button,
@@ -1075,11 +1151,15 @@ fn spawn_shop_overlay(mut commands: Commands) {
                                     font_size: 16.0,
                                     ..default()
                                 },
-                                TextColor(Color::srgb(0.1, 0.1, 0.1)),
-                                BackgroundColor(Color::srgb(0.88, 0.66, 0.16)),
+                                TextColor(Color::srgb(0.04, 0.06, 0.08)),
+                                BackgroundColor(UI_ACCENT),
+                                BorderColor::all(Color::srgb(1.0, 0.88, 0.46)),
+                                ui_button_shadow(),
                                 Node {
                                     width: px(92),
                                     height: px(26),
+                                    border: UiRect::all(px(1)),
+                                    border_radius: BorderRadius::all(px(7)),
                                     justify_content: JustifyContent::Center,
                                     align_items: AlignItems::Center,
                                     margin: UiRect::top(px(4)),
@@ -1097,11 +1177,18 @@ fn spawn_shop_overlay(mut commands: Commands) {
                     font_size: 20.0,
                     ..default()
                 },
-                TextColor(Color::WHITE),
-                BackgroundColor(Color::srgb(0.16, 0.48, 0.30)),
+                TextColor(UI_TEXT),
+                BackgroundColor(UI_SUCCESS),
+                BorderColor::all(Color::srgb(0.48, 0.86, 0.60)),
+                ui_button_shadow(),
                 Node {
                     width: px(160),
                     height: px(38),
+                    border: UiRect::all(px(1)),
+                    border_radius: BorderRadius::all(px(10)),
+                    position_type: PositionType::Absolute,
+                    right: px(42),
+                    bottom: px(30),
                     justify_content: JustifyContent::Center,
                     align_items: AlignItems::Center,
                     ..default()
@@ -1115,7 +1202,11 @@ fn sync_shop_overlay(
     mut panels: Query<&mut Visibility, With<ShopPanel>>,
     mut title: Query<&mut Text, (With<ShopTitle>, Without<ShopCardText>)>,
     mut cards: Query<(&ShopCardText, &mut Text)>,
-    mut buys: Query<(&ShopBuy, &mut BackgroundColor)>,
+    mut buys: Query<
+        (&Interaction, &ShopBuy, &mut BackgroundColor, &mut TextColor),
+        Without<ShopDone>,
+    >,
+    mut done: ShopDoneInteractions,
 ) {
     let active = session.active_shop_player();
     for mut panel in &mut panels {
@@ -1131,7 +1222,7 @@ fn sync_shop_overlay(
     let player = session.player(player_id);
     for mut text in &mut title {
         text.0 = format!(
-            "{}'S SHOP  ·  CASH ${}",
+            "{}'S ARMOURY | CASH ${}",
             player.configuration.display_name.to_uppercase(),
             player.cash
         );
@@ -1143,27 +1234,46 @@ fn sync_shop_overlay(
             .find(|item| item.weapon == card.0)
             .expect("shop weapon");
         let owned = match player.loadout.availability(card.0) {
-            WeaponAvailability::Unlimited => "∞".to_owned(),
+            WeaponAvailability::Unlimited => "UNLTD".to_owned(),
             WeaponAvailability::Remaining(n) => n.to_string(),
         };
         let visual = weapon::weapon_presentation(card.0);
         text.0 = format!(
-            "{}\n{}  {}\nOWNED: {}\n${}",
-            visual.glyph, visual.compact_name, definition.display_name, owned, item.price
+            "{}\n{}\nOWNED  x{}\n${}\n{}",
+            definition.display_name, visual.compact_name, owned, item.price, visual.description
         );
     }
-    for (buy, mut color) in &mut buys {
+    for (interaction, buy, mut color, mut text) in &mut buys {
         let price = weapon_price(buy.0).expect("shop weapon");
-        color.0 = if player.cash >= price {
-            Color::srgb(0.88, 0.66, 0.16)
+        let affordable = player.cash >= price;
+        color.0 = if !affordable {
+            UI_DISABLED
+        } else if *interaction == Interaction::Pressed {
+            Color::srgb(0.78, 0.48, 0.08)
+        } else if *interaction == Interaction::Hovered {
+            Color::srgb(1.0, 0.84, 0.34)
         } else {
-            Color::srgb(0.25, 0.28, 0.32)
+            UI_ACCENT
+        };
+        text.0 = if affordable {
+            Color::srgb(0.04, 0.06, 0.08)
+        } else {
+            UI_MUTED
+        };
+    }
+    for (interaction, mut color) in &mut done {
+        color.0 = match *interaction {
+            Interaction::Pressed => Color::srgb(0.10, 0.34, 0.20),
+            Interaction::Hovered => Color::srgb(0.28, 0.72, 0.44),
+            Interaction::None => UI_SUCCESS,
         };
     }
 }
 
 fn handle_shop_input(
+    mut commands: Commands,
     mut writable: ResMut<GameSession>,
+    audio: Res<AudioAssets>,
     buys: Query<(&Interaction, &ShopBuy), Changed<Interaction>>,
     done: Query<&Interaction, (With<ShopDone>, Changed<Interaction>)>,
 ) {
@@ -1174,8 +1284,11 @@ fn handle_shop_input(
     }
     let active = writable.active_shop_player().expect("human shopper");
     for (interaction, buy) in &buys {
-        if *interaction == Interaction::Pressed {
-            writable.purchase(active, buy.0);
+        if *interaction == Interaction::Pressed && writable.purchase(active, buy.0) {
+            commands.spawn((
+                AudioPlayer(audio.purchase.clone()),
+                PlaybackSettings::DESPAWN,
+            ));
         }
     }
     for interaction in &done {
@@ -1207,9 +1320,9 @@ fn sync_session_flow_overlay(
 ) {
     let message = match session.phase {
         SessionPhase::Playing | SessionPhase::Setup | SessionPhase::Transition => None,
-        SessionPhase::Celebrating => Some("ROUND COMPLETE!\nPRESS ENTER FOR ACCOUNTING".to_owned()),
+        SessionPhase::Celebrating => Some("ROUND COMPLETE\n\nPRESS ENTER FOR EARNINGS".to_owned()),
         SessionPhase::Accounting => Some(format!(
-            "ROUND ACCOUNTING\n{}\nPRESS ENTER FOR WEAPON SHOP",
+            "ROUND EARNINGS\n\n{}\n\nPRESS ENTER FOR THE ARMOURY",
             session
                 .players
                 .iter()
@@ -1221,7 +1334,7 @@ fn sync_session_flow_overlay(
                         .map(|(_, earnings)| *earnings)
                         .unwrap_or_default();
                     format!(
-                        "{}  DAMAGE ${} + PLACEMENT ${} = ${}  CASH ${}",
+                        "{}\n  DAMAGE          ${}\n  PLACEMENT       ${}\n  -----------------\n  ROUND EARNINGS  ${}\n  WALLET          ${}",
                         p.configuration.display_name,
                         earnings.damage_income,
                         earnings.placement_income,
@@ -1270,7 +1383,7 @@ fn update_match_setup(
     world: MatchSetupWorldResources,
     dressing_render: (ResMut<Assets<Mesh>>, Res<WorldDressingAssets>),
     tank_meshes: Res<TankMeshes>,
-    presentation: Res<TankPresentationAssets>,
+    presentation_assets: (Res<TankPresentationAssets>, Res<WeaponIconAssets>),
     overlays: Query<Entity, With<MatchSetupOverlay>>,
     huds: Query<Entity, With<TacticalHud>>,
     tank_visuals: Query<Entity, With<TankVisual>>,
@@ -1300,6 +1413,7 @@ fn update_match_setup(
         mut camera_aim_reset,
     ) = world;
     let (mut meshes, dressing_assets) = dressing_render;
+    let (presentation, icons) = presentation_assets;
     let transition_start = gate.started && session.phase == SessionPhase::Transition;
     if gate.started && !transition_start {
         return;
@@ -1483,7 +1597,7 @@ fn update_match_setup(
         for entity in &huds {
             commands.entity(entity).despawn();
         }
-        spawn_tactical_hud(&mut commands, &configuration.0.players);
+        spawn_tactical_hud(&mut commands, &configuration.0.players, &icons);
         gate.started = true;
         for overlay in &overlays {
             commands.entity(overlay).despawn();
@@ -2340,7 +2454,11 @@ fn update_wind_indicator_overlay(
     arrow.rotation = Quat::from_rotation_y(wind_arrow_rotation(wind.0));
 }
 
-fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) {
+fn spawn_tactical_hud(
+    commands: &mut Commands,
+    players: &[PlayerConfiguration],
+    icons: &WeaponIconAssets,
+) {
     commands
         .spawn((
             TacticalHud,
@@ -2367,8 +2485,8 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
                 Pickable::IGNORE,
             ));
             root.spawn((
-                BackgroundColor(Color::srgba(0.03, 0.05, 0.08, 0.82)),
-                BorderColor::all(Color::srgb(0.85, 0.25, 0.18)),
+                BackgroundColor(UI_PANEL),
+                BorderColor::all(UI_ACCENT),
                 HudActivePlayerPanel,
                 Node {
                     position_type: PositionType::Absolute,
@@ -2389,8 +2507,8 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
                 }
             });
             root.spawn((
-                BackgroundColor(Color::srgba(0.03, 0.05, 0.08, 0.82)),
-                BorderColor::all(Color::srgb(0.9, 0.75, 0.2)),
+                BackgroundColor(UI_PANEL),
+                BorderColor::all(UI_ACCENT),
                 Node {
                     position_type: PositionType::Absolute,
                     top: px(16),
@@ -2408,8 +2526,8 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
                 hud_text(p, HudTextField::Weapon, 16.0);
             });
             root.spawn((
-                BackgroundColor(Color::srgba(0.03, 0.05, 0.08, 0.82)),
-                BorderColor::all(Color::srgb(0.55, 0.7, 0.9)),
+                BackgroundColor(UI_PANEL),
+                BorderColor::all(UI_BORDER),
                 Node {
                     position_type: PositionType::Absolute,
                     top: px(16),
@@ -2434,8 +2552,8 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
                 hud_text(wind, HudTextField::Wind, 15.0);
             });
             root.spawn((
-                BackgroundColor(Color::srgba(0.03, 0.05, 0.08, 0.82)),
-                BorderColor::all(Color::srgb(0.4, 0.6, 0.8)),
+                BackgroundColor(UI_PANEL),
+                BorderColor::all(UI_BORDER),
                 Node {
                     position_type: PositionType::Absolute,
                     bottom: px(16),
@@ -2456,10 +2574,14 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
                 position_type: PositionType::Absolute,
                 bottom: px(18),
                 left: percent(50),
-                width: px(768),
-                height: px(62),
-                margin: UiRect::left(px(-384)),
-                column_gap: px(6),
+                width: percent(82.0),
+                max_width: px(980),
+                height: px(86),
+                // The strip's capped width is 980px; anchoring its exact half-width at the
+                // viewport midpoint keeps the weapon inventory centred instead of depending on
+                // percentage-margin behaviour in Bevy's flex layout.
+                margin: UiRect::left(px(-490)),
+                column_gap: px(5),
                 justify_content: JustifyContent::Center,
                 align_items: AlignItems::Center,
                 ..default()
@@ -2470,12 +2592,14 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
                             Button,
                             WeaponSlot(weapon),
                             Visibility::Hidden,
-                            BackgroundColor(Color::srgba(0.07, 0.10, 0.14, 0.94)),
-                            BorderColor::all(Color::srgb(0.34, 0.40, 0.48)),
+                            BackgroundColor(UI_PANEL),
+                            BorderColor::all(UI_BORDER),
+                            ui_button_shadow(),
                             Node {
-                                width: px(58),
-                                height: px(58),
+                                width: px(76),
+                                height: px(78),
                                 border: UiRect::all(px(2)),
+                                border_radius: BorderRadius::all(px(8)),
                                 justify_content: JustifyContent::Center,
                                 align_items: AlignItems::Center,
                                 ..default()
@@ -2483,18 +2607,27 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
                         ))
                         .with_children(|slot| {
                             slot.spawn((
-                                Text::new(format!(
-                                    "{}\n{}",
-                                    weapon::weapon_presentation(weapon).glyph,
-                                    weapon_strip_label(weapon)
-                                )),
-                                TextFont {
-                                    font_size: 11.0,
+                                ImageNode::new(icons.icon(weapon)),
+                                Node {
+                                    width: px(50),
+                                    height: px(43),
+                                    position_type: PositionType::Absolute,
+                                    top: px(1),
                                     ..default()
                                 },
-                                TextColor(Color::srgb(0.95, 0.90, 0.72)),
+                            ));
+                            slot.spawn((
+                                Text::new(weapon_strip_label(weapon)),
+                                TextFont {
+                                    font_size: 10.0,
+                                    ..default()
+                                },
+                                TextColor(UI_TEXT),
                                 Node {
-                                    width: px(45),
+                                    position_type: PositionType::Absolute,
+                                    bottom: px(4),
+                                    width: percent(100.0),
+                                    justify_content: JustifyContent::Center,
                                     ..default()
                                 },
                             ));
@@ -2508,7 +2641,7 @@ fn spawn_tactical_hud(commands: &mut Commands, players: &[PlayerConfiguration]) 
                                 TextColor(Color::WHITE),
                                 Node {
                                     position_type: PositionType::Absolute,
-                                    top: px(2),
+                                    top: px(4),
                                     right: px(5),
                                     ..default()
                                 },
@@ -2747,29 +2880,34 @@ fn sync_tactical_hud(
         let loadout = weapons.0.for_player(player);
         for (slot, mut visibility, mut background, mut border) in &mut weapon_slots {
             let availability = loadout.availability(slot.0);
-            *visibility = if selectable && availability.is_available() {
+            *visibility = if selectable {
                 Visibility::Visible
             } else {
                 Visibility::Hidden
             };
             let selected = slot.0 == loadout.selected();
-            border.top = if selected {
-                Color::srgb(1.0, 0.72, 0.18)
+            let enabled = availability.is_available();
+            border.top = if selected && enabled {
+                UI_ACCENT
+            } else if enabled {
+                UI_BORDER
             } else {
-                Color::srgb(0.34, 0.40, 0.48)
+                UI_DISABLED
             };
             border.right = border.top;
             border.bottom = border.top;
             border.left = border.top;
-            background.0 = if selected {
-                Color::srgba(0.25, 0.19, 0.06, 0.96)
+            background.0 = if !enabled {
+                Color::srgba(0.04, 0.05, 0.06, 0.78)
+            } else if selected {
+                Color::srgba(0.25, 0.19, 0.06, 0.98)
             } else {
-                Color::srgba(0.07, 0.10, 0.14, 0.94)
+                UI_PANEL
             };
         }
         for (ammo, mut text) in &mut weapon_ammunition {
             text.0 = match loadout.availability(ammo.0) {
-                WeaponAvailability::Unlimited => "∞".into(),
+                WeaponAvailability::Unlimited => "UNLTD".into(),
                 WeaponAvailability::Remaining(rounds) => rounds.to_string(),
             };
         }
@@ -4759,6 +4897,17 @@ mod tests {
         assert!(
             weapons
                 .for_player_mut(PlayerId::One)
+                .add_round(WeaponId::HighExplosive)
+        );
+        assert!(
+            weapons
+                .for_player_mut(PlayerId::One)
+                .add_round(WeaponId::HighExplosive)
+        );
+
+        assert!(
+            weapons
+                .for_player_mut(PlayerId::One)
                 .select(WeaponId::HighExplosive)
         );
         let view = tactical_hud_view(
@@ -4783,6 +4932,16 @@ mod tests {
             "CLICK WEAPON BAR | M MOVE | SPACE FIRE\nLEFT-DRAG CAMERA | SCROLL ZOOM | ARROWS AIM | CURVE: ARROWS STEER IN FLIGHT | -/= POWER"
         );
 
+        assert!(
+            weapons
+                .for_player_mut(PlayerId::One)
+                .add_round(WeaponId::HeavyShell)
+        );
+        assert!(
+            weapons
+                .for_player_mut(PlayerId::One)
+                .add_round(WeaponId::HeavyShell)
+        );
         assert!(
             weapons
                 .for_player_mut(PlayerId::One)

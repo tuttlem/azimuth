@@ -40,7 +40,8 @@ pub enum WeaponId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct WeaponPresentation {
     pub compact_name: &'static str,
-    pub glyph: &'static str,
+    pub icon_path: &'static str,
+    pub description: &'static str,
 }
 
 /// Presentation is intentionally a small, engine-independent lookup shared by the shop and HUD.
@@ -48,52 +49,64 @@ pub const fn weapon_presentation(id: WeaponId) -> WeaponPresentation {
     match id {
         WeaponId::BasicShell => WeaponPresentation {
             compact_name: "BASIC",
-            glyph: "●",
+            icon_path: "ui/weapons/basic-shell.png",
+            description: "Always ready.",
         },
         WeaponId::HighExplosive => WeaponPresentation {
             compact_name: "HE",
-            glyph: "✹",
+            icon_path: "ui/weapons/high-explosive.png",
+            description: "Reliable splash damage.",
         },
         WeaponId::HeavyShell => WeaponPresentation {
             compact_name: "HEAVY",
-            glyph: "⬤",
+            icon_path: "ui/weapons/heavy-shell.png",
+            description: "Big shell. Bigger problem.",
         },
         WeaponId::Mirv => WeaponPresentation {
             compact_name: "MIRV",
-            glyph: "●↘",
+            icon_path: "ui/weapons/mirv.png",
+            description: "One shell. Several problems.",
         },
         WeaponId::ClusterBomb => WeaponPresentation {
             compact_name: "CLSTR",
-            glyph: "●··",
+            icon_path: "ui/weapons/cluster-bomb.png",
+            description: "Spread the enthusiasm.",
         },
         WeaponId::Roller => WeaponPresentation {
             compact_name: "ROLL",
-            glyph: "◉",
+            icon_path: "ui/weapons/roller.png",
+            description: "Keeps on rolling.",
         },
         WeaponId::BunkerBuster => WeaponPresentation {
             compact_name: "BUNK",
-            glyph: "│▼",
+            icon_path: "ui/weapons/bunker-buster.png",
+            description: "Landscape first. Questions later.",
         },
         WeaponId::DirtBomb => WeaponPresentation {
             compact_name: "DIRT",
-            glyph: "●⌂",
+            icon_path: "ui/weapons/dirt-bomb.png",
+            description: "Put the hill back.",
         },
         WeaponId::CurveBall => WeaponPresentation {
             compact_name: "CURVE",
-            glyph: "⌒●",
+            icon_path: "ui/weapons/curve-ball.png",
+            description: "The scenic route.",
         },
         WeaponId::Bouncer => WeaponPresentation {
             compact_name: "BOUNCE",
-            glyph: "╱●╲",
+            icon_path: "ui/weapons/bouncer.png",
+            description: "Never just one landing.",
         },
         WeaponId::Nuke => WeaponPresentation {
             compact_name: "NUKE",
-            glyph: "☢",
+            icon_path: "ui/weapons/nuke.png",
+            description: "Subtlety was considered.",
         },
         #[cfg(test)]
         WeaponId::TestConventional => WeaponPresentation {
             compact_name: "TEST",
-            glyph: "?",
+            icon_path: "ui/weapons/basic-shell.png",
+            description: "Test weapon.",
         },
     }
 }
@@ -130,16 +143,16 @@ pub const SHOP_WEAPONS: [WeaponId; 10] = [
 pub const fn weapon_price(id: WeaponId) -> Option<u32> {
     match id {
         WeaponId::BasicShell => None,
-        WeaponId::HighExplosive => Some(300),
-        WeaponId::HeavyShell => Some(250),
-        WeaponId::Mirv => Some(600),
-        WeaponId::ClusterBomb => Some(550),
-        WeaponId::Roller => Some(400),
-        WeaponId::BunkerBuster => Some(700),
-        WeaponId::DirtBomb => Some(350),
-        WeaponId::CurveBall => Some(400),
-        WeaponId::Bouncer => Some(350),
-        WeaponId::Nuke => Some(1500),
+        WeaponId::HighExplosive => Some(3_000),
+        WeaponId::HeavyShell => Some(2_500),
+        WeaponId::Mirv => Some(6_000),
+        WeaponId::ClusterBomb => Some(5_500),
+        WeaponId::Roller => Some(4_000),
+        WeaponId::BunkerBuster => Some(7_000),
+        WeaponId::DirtBomb => Some(3_500),
+        WeaponId::CurveBall => Some(4_000),
+        WeaponId::Bouncer => Some(3_500),
+        WeaponId::Nuke => Some(15_000),
         #[cfg(test)]
         WeaponId::TestConventional => None,
     }
@@ -415,28 +428,18 @@ impl Default for PlayerWeaponLoadout {
             basic_shell: WeaponAvailability::from_rule(
                 weapon_definition(WeaponId::BasicShell).ammunition,
             ),
-            high_explosive: WeaponAvailability::from_rule(
-                weapon_definition(WeaponId::HighExplosive).ammunition,
-            ),
-            heavy_shell: WeaponAvailability::from_rule(
-                weapon_definition(WeaponId::HeavyShell).ammunition,
-            ),
-            mirv: WeaponAvailability::from_rule(weapon_definition(WeaponId::Mirv).ammunition),
-            cluster_bomb: WeaponAvailability::from_rule(
-                weapon_definition(WeaponId::ClusterBomb).ammunition,
-            ),
-            roller: WeaponAvailability::from_rule(weapon_definition(WeaponId::Roller).ammunition),
-            bunker_buster: WeaponAvailability::from_rule(
-                weapon_definition(WeaponId::BunkerBuster).ammunition,
-            ),
-            dirt_bomb: WeaponAvailability::from_rule(
-                weapon_definition(WeaponId::DirtBomb).ammunition,
-            ),
-            curve_ball: WeaponAvailability::from_rule(
-                weapon_definition(WeaponId::CurveBall).ammunition,
-            ),
-            bouncer: WeaponAvailability::from_rule(weapon_definition(WeaponId::Bouncer).ammunition),
-            nuke: WeaponAvailability::from_rule(weapon_definition(WeaponId::Nuke).ammunition),
+            // Players begin with the universal Basic Shell only. Limited ammunition enters a
+            // loadout exclusively through the between-round shop.
+            high_explosive: WeaponAvailability::Remaining(0),
+            heavy_shell: WeaponAvailability::Remaining(0),
+            mirv: WeaponAvailability::Remaining(0),
+            cluster_bomb: WeaponAvailability::Remaining(0),
+            roller: WeaponAvailability::Remaining(0),
+            bunker_buster: WeaponAvailability::Remaining(0),
+            dirt_bomb: WeaponAvailability::Remaining(0),
+            curve_ball: WeaponAvailability::Remaining(0),
+            bouncer: WeaponAvailability::Remaining(0),
+            nuke: WeaponAvailability::Remaining(0),
         }
     }
 }
@@ -673,6 +676,8 @@ mod tests {
         assert!(mirv.impact.maximum_damage < he.impact.maximum_damage);
         assert!(mirv.impact.damage_radius < he.impact.damage_radius);
         let mut loadout = PlayerWeaponLoadout::default();
+        assert!(loadout.add_round(WeaponId::Mirv));
+        assert!(loadout.add_round(WeaponId::Mirv));
         assert!(loadout.select(WeaponId::Mirv));
         assert_eq!(loadout.commit_selected().unwrap().id, WeaponId::Mirv);
         assert_eq!(
@@ -727,6 +732,16 @@ mod tests {
         assert!(
             loadouts
                 .for_player_mut(PlayerId::One)
+                .add_round(WeaponId::HighExplosive)
+        );
+        assert!(
+            loadouts
+                .for_player_mut(PlayerId::One)
+                .add_round(WeaponId::HighExplosive)
+        );
+        assert!(
+            loadouts
+                .for_player_mut(PlayerId::One)
                 .select(WeaponId::HighExplosive)
         );
         assert_eq!(
@@ -748,14 +763,15 @@ mod tests {
             loadouts
                 .for_player(PlayerId::Two)
                 .availability(WeaponId::HighExplosive),
-            WeaponAvailability::Remaining(2)
+            WeaponAvailability::Remaining(0)
         );
     }
 
     #[test]
     fn fired_shot_copies_the_profile_not_the_later_loadout() {
         let mut loadout = PlayerWeaponLoadout::default();
-        loadout.select(WeaponId::HeavyShell);
+        assert!(loadout.add_round(WeaponId::HeavyShell));
+        assert!(loadout.select(WeaponId::HeavyShell));
         let definition = loadout.commit_selected().unwrap();
         let projectile = Projectile::launch_with_wind_response(
             crate::projectile::ShotParameters::new(
@@ -829,6 +845,8 @@ mod tests {
 
         let mut loadouts = PlayerWeaponLoadouts::default();
         let player_one = loadouts.for_player_mut(PlayerId::One);
+        assert!(player_one.add_round(WeaponId::HeavyShell));
+        assert!(player_one.add_round(WeaponId::HeavyShell));
         assert_eq!(
             player_one.availability(WeaponId::HeavyShell),
             WeaponAvailability::Remaining(2)
@@ -846,7 +864,7 @@ mod tests {
             loadouts
                 .for_player(PlayerId::Two)
                 .availability(WeaponId::HeavyShell),
-            WeaponAvailability::Remaining(2)
+            WeaponAvailability::Remaining(0)
         );
     }
 
@@ -868,8 +886,39 @@ mod tests {
                     .damage_radius
         );
         let mut loadout = PlayerWeaponLoadout::default();
+        assert!(loadout.add_round(WeaponId::Nuke));
         assert!(loadout.select(WeaponId::Nuke));
         assert_eq!(loadout.commit_selected().unwrap().id, WeaponId::Nuke);
         assert!(!loadout.select(WeaponId::Nuke));
+    }
+
+    #[test]
+    fn every_active_and_shop_weapon_has_shared_graphical_presentation_metadata() {
+        for weapon in ACTIVE_WEAPONS {
+            let presentation = weapon_presentation(weapon);
+            assert!(!presentation.compact_name.is_empty());
+            assert!(presentation.icon_path.starts_with("ui/weapons/"));
+            assert!(presentation.icon_path.ends_with(".png"));
+        }
+        for weapon in SHOP_WEAPONS {
+            assert!(ACTIVE_WEAPONS.contains(&weapon));
+            assert!(weapon_price(weapon).is_some_and(|price| price > 0));
+        }
+        assert_eq!(weapon_price(WeaponId::BasicShell), None);
+    }
+
+    #[test]
+    fn new_loadouts_have_only_unlimited_basic_shells() {
+        let loadout = PlayerWeaponLoadout::default();
+        assert_eq!(
+            loadout.availability(WeaponId::BasicShell),
+            WeaponAvailability::Unlimited
+        );
+        for weapon in SHOP_WEAPONS {
+            assert_eq!(
+                loadout.availability(weapon),
+                WeaponAvailability::Remaining(0)
+            );
+        }
     }
 }
