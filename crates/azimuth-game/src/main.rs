@@ -81,6 +81,7 @@ const WIND_KPH_PER_ACCELERATION: f32 = 10.0;
 const WIND_INDICATOR_RENDER_LAYER: usize = 1;
 const WIND_INDICATOR_WIDTH: u32 = 150;
 const WIND_INDICATOR_HEIGHT: u32 = 52;
+const WIND_INDICATOR_LIGHT_INTENSITY: f32 = 150_000.0;
 const WIND_ENABLED: bool = true;
 const EXPLOSION_VISUAL_DURATION_SECONDS: f32 = 0.6;
 const EXPLOSION_INITIAL_SCALE: f32 = 0.35;
@@ -269,6 +270,11 @@ struct BattlefieldWind(Wind);
 #[derive(Resource, Default)]
 struct MovementFeedback(Option<MovementRejection>);
 
+/// Space completes movement, but normally also fires. This frame-local latch prevents the
+/// completion press from being interpreted as the newly active player's shot.
+#[derive(Resource, Default)]
+struct MovementCompletionThisFrame(bool);
+
 /// Keyboard turret adjustments deliberately end free camera exploration. This presentation-only
 /// latch restores the behind-the-tank aiming view on the next camera update.
 #[derive(Resource, Default)]
@@ -369,6 +375,7 @@ struct ImpactEffectAssets {
 #[derive(Resource)]
 struct WorldDressingAssets {
     material: Handle<StandardMaterial>,
+    horizon_material: Handle<StandardMaterial>,
 }
 
 #[derive(Component)]
@@ -512,7 +519,7 @@ struct TacticalHudView {
     aim: Option<AimingState>,
     weapon: Option<(WeaponId, WeaponAvailability)>,
     wind: Wind,
-    movement: Option<(u8, Option<MovementRejection>)>,
+    movement: Option<MovementRejection>,
     result: MatchState,
 }
 
@@ -631,6 +638,7 @@ fn main() {
         .insert_resource(CurrentImpactExplosionConsumed::default())
         .insert_resource(ImpactFlash::default())
         .insert_resource(MovementFeedback::default())
+        .insert_resource(MovementCompletionThisFrame::default())
         .insert_resource(CameraAimReset::default())
         .insert_resource(MatchSetupGate::default())
         .insert_resource(PendingMatchConfiguration(configuration))
@@ -760,7 +768,8 @@ fn spawn_battlefield_scene(
             BattlefieldSeed(derived_seed(match_seed.0, "terrain")),
         )))),
         MeshMaterial3d(materials.add(StandardMaterial {
-            unlit: true,
+            base_color: Color::WHITE,
+            perceptual_roughness: 0.88,
             ..default()
         })),
     ));
@@ -792,6 +801,11 @@ fn spawn_battlefield_scene(
     );
     commands.insert_resource(WorldDressingAssets {
         material: building_material,
+        horizon_material: materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            perceptual_roughness: 0.88,
+            ..default()
+        }),
     });
 
     commands.spawn((
@@ -941,7 +955,7 @@ fn spawn_wind_indicator_overlay(
     ));
     commands.spawn((
         PointLight {
-            intensity: 90_000.0,
+            intensity: WIND_INDICATOR_LIGHT_INTENSITY,
             range: 20.0,
             shadows_enabled: false,
             ..default()
@@ -960,9 +974,10 @@ fn spawn_wind_indicator_overlay(
             arrow.spawn((
                 Mesh3d(meshes.add(Cylinder::new(0.13, 2.6))),
                 MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.16, 0.43, 0.82),
-                    metallic: 0.45,
-                    perceptual_roughness: 0.25,
+                    base_color: Color::srgb(0.18, 0.72, 1.0),
+                    emissive: Color::srgb(0.08, 0.38, 0.9).into(),
+                    metallic: 0.2,
+                    perceptual_roughness: 0.3,
                     ..default()
                 })),
                 Transform::from_rotation(Quat::from_rotation_z(-std::f32::consts::FRAC_PI_2)),
@@ -971,7 +986,8 @@ fn spawn_wind_indicator_overlay(
             arrow.spawn((
                 Mesh3d(meshes.add(Cone::new(0.48, 1.15))),
                 MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color: Color::srgb(0.98, 0.73, 0.12),
+                    base_color: Color::srgb(1.0, 0.84, 0.22),
+                    emissive: Color::srgb(0.45, 0.25, 0.02).into(),
                     metallic: 0.3,
                     perceptual_roughness: 0.2,
                     ..default()
@@ -1012,12 +1028,7 @@ fn spawn_match_setup(mut commands: Commands) {
                 BorderColor::all(UI_ACCENT),
             ))
             .with_children(|panel| {
-                setup_text(
-                    panel,
-                    "AZIMUTH - MATCH SETUP",
-                    30.0,
-                    UI_ACCENT,
-                );
+                setup_text(panel, "AZIMUTH - MATCH SETUP", 30.0, UI_ACCENT);
                 panel.spawn((
                     MatchSetupDetails,
                     Text::new(""),
@@ -1029,16 +1040,11 @@ fn spawn_match_setup(mut commands: Commands) {
                 ));
                 setup_text(
                     panel,
-                    "2-8: COUNT | UP/DOWN: SLOT | TYPE: NAME | CTRL+C: HUMAN/AI | CTRL+R: REROLL AI",
+                    "2-8: COUNT | UP/DOWN: SLOT | TYPE: NAME | TAB: HUMAN/AI | CTRL+R: REROLL AI",
                     16.0,
                     UI_MUTED,
                 );
-                setup_text(
-                    panel,
-                    "PRESS ENTER TO START MATCH",
-                    18.0,
-                    UI_ACCENT,
-                );
+                setup_text(panel, "PRESS ENTER TO START MATCH", 18.0, UI_ACCENT);
             });
         });
 }
@@ -1061,15 +1067,55 @@ fn spawn_session_flow_overlay(mut commands: Commands) {
         ))
         .with_children(|root| {
             root.spawn((
-                SessionFlowText,
-                Text::new(""),
-                TextFont {
-                    font_size: 28.0,
+                Node {
+                    width: px(860.0),
+                    max_width: percent(92.0),
+                    padding: UiRect::all(px(26.0)),
+                    border: UiRect::all(px(2.0)),
                     ..default()
                 },
-                TextColor(UI_ACCENT),
-            ));
+                BackgroundColor(UI_PANEL),
+                BorderColor::all(UI_ACCENT),
+            ))
+            .with_children(|panel| {
+                panel.spawn((
+                    SessionFlowText,
+                    Text::new(""),
+                    TextFont {
+                        font_size: 17.0,
+                        ..default()
+                    },
+                    TextColor(UI_TEXT),
+                ));
+            });
         });
+}
+
+fn accounting_text(session: &GameSession) -> String {
+    let rows = session
+        .players
+        .iter()
+        .map(|player| {
+            let earnings = session
+                .earnings
+                .iter()
+                .find(|(id, _)| *id == player.configuration.id)
+                .map(|(_, earnings)| *earnings)
+                .unwrap_or_default();
+            format!(
+                "{:<18}  ${:>5}  ${:>5}  ${:>5}  ${:>5}",
+                player.configuration.display_name,
+                earnings.damage_income,
+                earnings.placement_income,
+                earnings.total(),
+                player.cash
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    format!(
+        "ROUND EARNINGS\n\nPLAYER               DAMAGE  PLACE  TOTAL  WALLET\n{rows}\n\nPRESS ENTER FOR THE ARMOURY"
+    )
 }
 
 fn spawn_shop_overlay(mut commands: Commands, icons: Res<WeaponIconAssets>) {
@@ -1321,30 +1367,7 @@ fn sync_session_flow_overlay(
     let message = match session.phase {
         SessionPhase::Playing | SessionPhase::Setup | SessionPhase::Transition => None,
         SessionPhase::Celebrating => Some("ROUND COMPLETE\n\nPRESS ENTER FOR EARNINGS".to_owned()),
-        SessionPhase::Accounting => Some(format!(
-            "ROUND EARNINGS\n\n{}\n\nPRESS ENTER FOR THE ARMOURY",
-            session
-                .players
-                .iter()
-                .map(|p| {
-                    let earnings = session
-                        .earnings
-                        .iter()
-                        .find(|(id, _)| *id == p.configuration.id)
-                        .map(|(_, earnings)| *earnings)
-                        .unwrap_or_default();
-                    format!(
-                        "{}\n  DAMAGE          ${}\n  PLACEMENT       ${}\n  -----------------\n  ROUND EARNINGS  ${}\n  WALLET          ${}",
-                        p.configuration.display_name,
-                        earnings.damage_income,
-                        earnings.placement_income,
-                        earnings.total(),
-                        p.cash
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("\n")
-        )),
+        SessionPhase::Accounting => Some(accounting_text(&session)),
         SessionPhase::Shopping => None,
     };
     for mut visibility in &mut overlays {
@@ -1446,7 +1469,7 @@ fn update_match_setup(
     }
     let control_held =
         keyboard.pressed(KeyCode::ControlLeft) || keyboard.pressed(KeyCode::ControlRight);
-    if control_held && keyboard.just_pressed(KeyCode::KeyC) {
+    if setup_controller_toggle_requested(&keyboard) {
         let (id, previous) = {
             let slot = &configuration.0.players[gate.selected_slot];
             (slot.id, slot.controller)
@@ -1586,7 +1609,7 @@ fn update_match_setup(
                 &terrain.0,
                 BattlefieldSeed(derived_seed(selected_round_seed, "terrain")),
             )))),
-            MeshMaterial3d(dressing_assets.material.clone()),
+            MeshMaterial3d(dressing_assets.horizon_material.clone()),
         ));
         spawn_buildings(
             &mut commands,
@@ -1603,6 +1626,10 @@ fn update_match_setup(
             commands.entity(overlay).despawn();
         }
     }
+}
+
+fn setup_controller_toggle_requested(keyboard: &ButtonInput<KeyCode>) -> bool {
+    keyboard.just_pressed(KeyCode::Tab)
 }
 
 /// The setup uses a deliberately small keyboard editor instead of a general UI text-input
@@ -1659,6 +1686,7 @@ fn launch_aimed_projectile(
     setup: Res<MatchSetupGate>,
     configuration: Res<PendingMatchConfiguration>,
     presentation: Res<ShotPresentation>,
+    movement_completion: Res<MovementCompletionThisFrame>,
     tanks: Res<Tanks>,
     assets: Res<ProjectileVisualAssets>,
     audio: Res<AudioAssets>,
@@ -1670,6 +1698,7 @@ fn launch_aimed_projectile(
 ) {
     if !setup.started
         || !keyboard.just_pressed(KeyCode::Space)
+        || movement_completion.0
         || !current_player_is_human(&configuration.0, &turn.0)
         || !presentation_allows_new_action(&presentation)
         || flight.0.is_some()
@@ -2096,18 +2125,21 @@ fn update_movement_input(
     camera: Single<&BattlefieldCamera>,
     mut tanks: ResMut<Tanks>,
     mut feedback: ResMut<MovementFeedback>,
+    mut completion: ResMut<MovementCompletionThisFrame>,
     mut turn: ResMut<CurrentTurn>,
 ) {
+    completion.0 = false;
     if !setup.started
         || !current_player_is_human(&configuration.0, &turn.0)
         || !presentation_allows_new_action(&presentation)
-        || turn.0.remaining_movement().is_none()
+        || !turn.0.is_moving()
     {
         return;
     }
-    if keyboard.just_pressed(KeyCode::Enter) {
+    if movement_completion_requested(&keyboard) {
         if turn.0.finish_movement(survivors(&tanks.0)) {
             feedback.0 = None;
+            completion.0 = keyboard.just_pressed(KeyCode::Space);
         }
         return;
     }
@@ -2120,13 +2152,17 @@ fn update_movement_input(
         Ok(moved) => {
             *tank_for_player_mut(&mut tanks.0, player) = moved;
             assert!(
-                turn.0.accept_movement_step(survivors(&tanks.0)),
-                "moving turn must consume accepted step"
+                turn.0.accept_movement_step(),
+                "moving turn must retain accepted step"
             );
             feedback.0 = None;
         }
         Err(rejection) => feedback.0 = Some(rejection),
     }
+}
+
+fn movement_completion_requested(keyboard: &ButtonInput<KeyCode>) -> bool {
+    keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::Space)
 }
 
 /// Maps screen-space arrows to the nearest existing cardinal world step. This retains deliberate
@@ -2741,7 +2777,7 @@ fn tactical_hud_view(
     } else {
         match turn.phase {
             TurnPhase::Choosing => HudAction::Choose,
-            TurnPhase::Moving { .. } => HudAction::Moving,
+            TurnPhase::Moving => HudAction::Moving,
             TurnPhase::ResolvingFire => HudAction::Resolving,
             TurnPhase::Finished => HudAction::Finished,
         }
@@ -2756,7 +2792,7 @@ fn tactical_hud_view(
             (loadout.selected(), loadout.availability(loadout.selected()))
         }),
         wind,
-        movement: turn.remaining_movement().map(|steps| (steps, feedback)),
+        movement: turn.is_moving().then_some(feedback).flatten(),
         result: turn.match_state,
     }
 }
@@ -3031,21 +3067,21 @@ fn hud_field_text(field: HudTextField, view: &TacticalHudView) -> String {
             "{:.0} KPH",
             view.wind.strength() * WIND_KPH_PER_ACCELERATION
         ),
-        HudTextField::Movement => view.movement.map_or_else(String::new, |(s, r)| {
-            format!(
-                "MOVE: {s} LEFT{}",
-                match r {
+        HudTextField::Movement => match view.action {
+            HudAction::Moving => format!(
+                "MOVE: UNLIMITED{}",
+                match view.movement {
                     Some(MovementRejection::Bounds) => " - EDGE",
-                    Some(MovementRejection::Slope) => " - STEEP",
                     None => "",
                 }
-            )
-        }),
+            ),
+            _ => String::new(),
+        },
         HudTextField::Controls => match view.action {
             HudAction::Choose => {
                 "CLICK WEAPON BAR | M MOVE | SPACE FIRE\nLEFT-DRAG CAMERA | SCROLL ZOOM | ARROWS AIM | CURVE: ARROWS STEER IN FLIGHT | -/= POWER".into()
             }
-            HudAction::Moving => "ARROWS MOVE (CAMERA) | ENTER END".into(),
+            HudAction::Moving => "ARROWS MOVE (CAMERA) | SPACE/ENTER END".into(),
             HudAction::Resolving | HudAction::Finished => String::new(),
         },
     }
@@ -4771,6 +4807,34 @@ mod tests {
     }
 
     #[test]
+    fn move_completion_accepts_space_or_enter_and_setup_toggle_uses_tab() {
+        for key in [KeyCode::Space, KeyCode::Enter] {
+            let mut keyboard = ButtonInput::default();
+            keyboard.press(key);
+            assert!(movement_completion_requested(&keyboard));
+        }
+        let mut tab = ButtonInput::default();
+        tab.press(KeyCode::Tab);
+        assert!(setup_controller_toggle_requested(&tab));
+        let mut legacy = ButtonInput::default();
+        legacy.press(KeyCode::KeyC);
+        assert!(!setup_controller_toggle_requested(&legacy));
+    }
+
+    #[test]
+    fn accounting_text_compacts_all_supported_players_into_one_table() {
+        let mut configuration = MatchConfiguration::default();
+        configuration.set_player_count(8).unwrap();
+        let session = GameSession::new(configuration.players);
+        let text = accounting_text(&session);
+        assert!(text.contains("PLAYER               DAMAGE  PLACE  TOTAL  WALLET"));
+        for player in &session.players {
+            assert!(text.contains(&player.configuration.display_name));
+        }
+        assert!(text.contains("PRESS ENTER FOR THE ARMOURY"));
+    }
+
+    #[test]
     fn held_aiming_key_repeats_after_the_configured_delay_and_stops_on_release() {
         let mut keyboard = ButtonInput::default();
         let mut repeats = AimRepeatState::default();
@@ -4860,16 +4924,10 @@ mod tests {
             &configuration,
             PlayerWeaponLoadouts::default(),
             wind,
-            Some(MovementRejection::Slope),
+            Some(MovementRejection::Bounds),
         );
         assert_eq!(moving_view.action, HudAction::Moving);
-        assert_eq!(
-            moving_view.movement,
-            Some((
-                moving.remaining_movement().unwrap(),
-                Some(MovementRejection::Slope)
-            ))
-        );
+        assert_eq!(moving_view.movement, Some(MovementRejection::Bounds));
 
         let mut resolving = choosing.clone();
         assert!(resolving.begin_fire().is_some());
@@ -5329,7 +5387,7 @@ mod tests {
             .unwrap();
         tanks[0] = moved;
         assert!(turn.begin_movement());
-        assert!(turn.accept_movement_step([true, true]));
+        assert!(turn.accept_movement_step());
         assert!(turn.finish_movement([true, true]));
         assert!(turn.begin_fire().is_some());
         assert!(turn.complete_fire_resolution([true, true]));

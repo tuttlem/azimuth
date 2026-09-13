@@ -1,12 +1,12 @@
 use crate::{
     aiming::{AimAdjustment, AimingState},
-    tank::{MOVEMENT_ALLOWANCE, PlayerId},
+    tank::PlayerId,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurnPhase {
     Choosing,
-    Moving { remaining_steps: u8 },
+    Moving,
     ResolvingFire,
     Finished,
 }
@@ -84,35 +84,20 @@ impl TurnState {
         if self.match_state != MatchState::InProgress || self.phase != TurnPhase::Choosing {
             return false;
         }
-        self.phase = TurnPhase::Moving {
-            remaining_steps: MOVEMENT_ALLOWANCE,
-        };
+        self.phase = TurnPhase::Moving;
         true
     }
-    pub fn remaining_movement(&self) -> Option<u8> {
-        match self.phase {
-            TurnPhase::Moving { remaining_steps } => Some(remaining_steps),
-            _ => None,
-        }
+    pub fn is_moving(&self) -> bool {
+        self.phase == TurnPhase::Moving
     }
-    pub fn accept_movement_step(&mut self, survivors: impl AsRef<[bool]>) -> bool {
-        let TurnPhase::Moving { remaining_steps } = self.phase else {
+    pub fn accept_movement_step(&mut self) -> bool {
+        if self.match_state != MatchState::InProgress || !self.is_moving() {
             return false;
-        };
-        if remaining_steps == 0 {
-            return false;
-        }
-        if remaining_steps == 1 {
-            self.advance(survivors.as_ref());
-        } else {
-            self.phase = TurnPhase::Moving {
-                remaining_steps: remaining_steps - 1,
-            };
         }
         true
     }
     pub fn finish_movement(&mut self, survivors: impl AsRef<[bool]>) -> bool {
-        if self.match_state != MatchState::InProgress || self.remaining_movement().is_none() {
+        if self.match_state != MatchState::InProgress || !self.is_moving() {
             return false;
         }
         self.advance(survivors.as_ref());
@@ -226,6 +211,19 @@ mod tests {
         s.begin_movement();
         assert!(s.finish_movement([true, false, true, true]));
         assert_eq!(s.current_player, PlayerId(4));
+    }
+    #[test]
+    fn movement_has_no_step_budget_and_requires_explicit_completion() {
+        let mut s = state(2);
+        assert!(s.begin_movement());
+        for _ in 0..20 {
+            assert!(s.accept_movement_step());
+            assert!(s.is_moving());
+            assert_eq!(s.current_player, PlayerId(1));
+        }
+        assert!(s.finish_movement([true, true]));
+        assert_eq!(s.current_player, PlayerId(2));
+        assert_eq!(s.phase, TurnPhase::Choosing);
     }
     #[test]
     fn winner_and_draw_are_generic() {

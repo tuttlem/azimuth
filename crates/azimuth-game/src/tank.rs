@@ -5,8 +5,6 @@ use crate::world::{WorldPosition, WorldVector};
 const FIRING_ORIGIN_FORWARD_OFFSET: f32 = 2.1;
 const FIRING_ORIGIN_HEIGHT: f32 = 1.0;
 pub const MOVEMENT_STEP_DISTANCE: f32 = 1.0;
-pub const MOVEMENT_ALLOWANCE: u8 = 6;
-pub const MAX_MOVEMENT_ELEVATION_CHANGE: f32 = 0.75;
 pub const MAX_HEALTH: u8 = 100;
 pub const SUPPORT_TOLERANCE: f32 = 0.05;
 
@@ -73,7 +71,6 @@ impl MovementDirection {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MovementRejection {
     Bounds,
-    Slope,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -226,9 +223,8 @@ impl Tank {
         }
     }
 
-    /// Produces a new tank pose only when the adjacent current terrain position is in bounds and
-    /// passable. The caller owns the action allowance, so rejected terrain requests never mutate
-    /// this tank and an accepted result can be committed before one allowance is consumed.
+    /// Produces a new tank pose only when the adjacent current terrain position is in bounds.
+    /// The caller owns move-mode completion; rejected terrain requests never mutate this tank.
     pub fn step_on_terrain(
         self,
         terrain: &BattlefieldTerrain,
@@ -237,16 +233,8 @@ impl Tank {
         let (offset_x, offset_z) = direction.horizontal_offset();
         let destination_x = self.pose.position.x + offset_x;
         let destination_z = self.pose.position.z + offset_z;
-        let Some(elevation_change) = terrain.elevation_change_if_within_bounds(
-            self.pose.position.x,
-            self.pose.position.z,
-            destination_x,
-            destination_z,
-        ) else {
+        if !is_within_bounds(destination_x, destination_z) {
             return Err(MovementRejection::Bounds);
-        };
-        if elevation_change > MAX_MOVEMENT_ELEVATION_CHANGE {
-            return Err(MovementRejection::Slope);
         }
 
         let mut moved = self;
@@ -761,8 +749,6 @@ mod tests {
         );
         assert_eq!(MovementDirection::PositiveZ.horizontal_offset(), (0.0, 1.0));
         assert_eq!(MovementDirection::PositiveX.horizontal_offset(), (1.0, 0.0));
-        assert_eq!(MOVEMENT_ALLOWANCE, 6);
-        assert!(MAX_MOVEMENT_ELEVATION_CHANGE.is_finite());
     }
 
     #[test]
@@ -802,7 +788,7 @@ mod tests {
     }
 
     #[test]
-    fn deformed_terrain_is_grounded_when_passable_and_rejected_when_too_steep() {
+    fn deformed_terrain_is_grounded_and_steep_craters_remain_passable() {
         let mut terrain = BattlefieldTerrain::initial();
         let tank = initial_tanks(&terrain)[0];
         let impact = WorldPosition {
@@ -828,11 +814,12 @@ mod tests {
             },
             crate::battlefield::Crater::new(6.0, 20.0).unwrap(),
         );
-        let before = tank;
+        let moved = tank
+            .step_on_terrain(&steep_terrain, MovementDirection::PositiveX)
+            .expect("steep terrain no longer blocks movement");
         assert_eq!(
-            tank.step_on_terrain(&steep_terrain, MovementDirection::PositiveX),
-            Err(MovementRejection::Slope)
+            moved.pose.position.y,
+            steep_terrain.height(moved.pose.position.x, moved.pose.position.z)
         );
-        assert_eq!(tank, before);
     }
 }

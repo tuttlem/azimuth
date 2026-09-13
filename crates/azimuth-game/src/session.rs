@@ -251,7 +251,7 @@ mod tests {
     #[test]
     fn shop_purchase_is_atomic_and_player_scoped() {
         let mut session = GameSession::new(MatchConfiguration::default().players);
-        session.player_mut(PlayerId::One).cash = 6_000;
+        session.player_mut(PlayerId::One).cash = 600;
         session.begin_shop();
         let before = session
             .player(PlayerId::One)

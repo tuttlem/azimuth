@@ -143,15 +143,15 @@ pub const SHOP_WEAPONS: [WeaponId; 10] = [
 pub const fn weapon_price(id: WeaponId) -> Option<u32> {
     match id {
         WeaponId::BasicShell => None,
-        WeaponId::HighExplosive => Some(3_000),
-        WeaponId::HeavyShell => Some(2_500),
-        WeaponId::Mirv => Some(6_000),
-        WeaponId::ClusterBomb => Some(5_500),
-        WeaponId::Roller => Some(4_000),
-        WeaponId::BunkerBuster => Some(7_000),
-        WeaponId::DirtBomb => Some(3_500),
-        WeaponId::CurveBall => Some(4_000),
-        WeaponId::Bouncer => Some(3_500),
+        WeaponId::HighExplosive => Some(300),
+        WeaponId::HeavyShell => Some(250),
+        WeaponId::Mirv => Some(600),
+        WeaponId::ClusterBomb => Some(550),
+        WeaponId::Roller => Some(400),
+        WeaponId::BunkerBuster => Some(700),
+        WeaponId::DirtBomb => Some(350),
+        WeaponId::CurveBall => Some(400),
+        WeaponId::Bouncer => Some(350),
         WeaponId::Nuke => Some(15_000),
         #[cfg(test)]
         WeaponId::TestConventional => None,
@@ -904,6 +904,28 @@ mod tests {
             assert!(ACTIVE_WEAPONS.contains(&weapon));
             assert!(weapon_price(weapon).is_some_and(|price| price > 0));
         }
+        assert_eq!(weapon_price(WeaponId::BasicShell), None);
+    }
+
+    #[test]
+    fn ordinary_shop_weapons_are_discounted_while_nuke_stays_rare() {
+        let expected = [
+            (WeaponId::HighExplosive, 300),
+            (WeaponId::HeavyShell, 250),
+            (WeaponId::Mirv, 600),
+            (WeaponId::ClusterBomb, 550),
+            (WeaponId::Roller, 400),
+            (WeaponId::BunkerBuster, 700),
+            (WeaponId::DirtBomb, 350),
+            (WeaponId::CurveBall, 400),
+            (WeaponId::Bouncer, 350),
+        ];
+        assert_eq!(SHOP_WEAPONS.len(), expected.len() + 1);
+        for (weapon, price) in expected {
+            assert_eq!(weapon_price(weapon), Some(price));
+        }
+        assert_eq!(weapon_price(WeaponId::Nuke), Some(15_000));
+        assert!(15_000 > expected.iter().map(|(_, price)| *price).max().unwrap() * 20);
         assert_eq!(weapon_price(WeaponId::BasicShell), None);
     }
 

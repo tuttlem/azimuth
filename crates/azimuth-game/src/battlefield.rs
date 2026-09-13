@@ -35,8 +35,12 @@ pub struct VisualHorizon {
 }
 
 impl VisualHorizon {
-    const SEGMENTS_PER_EDGE: usize = 16;
-    const RADIAL_STEPS: usize = 4;
+    // Match every mutable terrain-edge vertex. A coarser perimeter interpolates differently
+    // between samples and can read as a slight tear even when its corner positions coincide.
+    const SEGMENTS_PER_EDGE: usize = TERRAIN_CELLS_PER_SIDE;
+    // Extra rings make the exterior height/colour transition gradual without expanding the
+    // authoritative terrain surface.
+    const RADIAL_STEPS: usize = 8;
 
     pub fn from_terrain(terrain: &BattlefieldTerrain, seed: BattlefieldSeed) -> Self {
         let inner = square_perimeter(HALF_EXTENT, Self::SEGMENTS_PER_EDGE);
@@ -46,6 +50,10 @@ impl VisualHorizon {
         let mut colours = Vec::with_capacity(positions.capacity());
         for ring in 0..=Self::RADIAL_STEPS {
             let fraction = ring as f32 / Self::RADIAL_STEPS as f32;
+            // Ease the palette transition as well as the geometry.  The first ring must be an
+            // exact visual continuation of the mutable combat terrain; farther rings fade into
+            // deterministic generated scenery without becoming part of that terrain.
+            let colour_fraction = smoothstep(fraction);
             for ((inner_x, inner_z), (outer_x, outer_z)) in inner.iter().zip(&outer) {
                 let x = inner_x + (outer_x - inner_x) * fraction;
                 let z = inner_z + (outer_z - inner_z) * fraction;
@@ -53,7 +61,11 @@ impl VisualHorizon {
                 let outer_height = generated_height(*outer_x, *outer_z, seed);
                 let height = inner_height + (outer_height - inner_height) * fraction;
                 positions.push([x, height, z]);
-                colours.push(elevation_colour(height));
+                colours.push(blend_colour(
+                    surface_colour(inner_height, *inner_x, *inner_z),
+                    surface_colour(outer_height, *outer_x, *outer_z),
+                    colour_fraction,
+                ));
             }
         }
         let mut indices = Vec::with_capacity(ring_len * Self::RADIAL_STEPS * 6);
@@ -248,23 +260,6 @@ impl BattlefieldTerrain {
         })
     }
 
-    /// Returns the absolute current-surface elevation change between two in-bounds horizontal
-    /// positions. Movement uses this rather than a tank's stored Y coordinate because a later
-    /// crater may have changed terrain below a stationary tank that intentionally has not settled.
-    pub fn elevation_change_if_within_bounds(
-        &self,
-        start_x: f32,
-        start_z: f32,
-        end_x: f32,
-        end_z: f32,
-    ) -> Option<f32> {
-        Some(
-            (self.height_if_within_bounds(end_x, end_z)?
-                - self.height_if_within_bounds(start_x, start_z)?)
-            .abs(),
-        )
-    }
-
     /// Lowers current vertices by a smooth bowl. The squared remaining fraction reaches zero at
     /// the radius, so adjacent unaffected terrain joins without a hard deformation edge.
     pub fn apply_crater(&mut self, centre: WorldPosition, crater: Crater) {
@@ -396,6 +391,21 @@ fn blend(first: [f32; 3], second: [f32; 3], fraction: f32) -> [f32; 3] {
         first[1] + (second[1] - first[1]) * fraction,
         first[2] + (second[2] - first[2]) * fraction,
     ]
+}
+
+fn blend_colour(first: [f32; 4], second: [f32; 4], fraction: f32) -> [f32; 4] {
+    let fraction = fraction.clamp(0.0, 1.0);
+    [
+        first[0] + (second[0] - first[0]) * fraction,
+        first[1] + (second[1] - first[1]) * fraction,
+        first[2] + (second[2] - first[2]) * fraction,
+        first[3] + (second[3] - first[3]) * fraction,
+    ]
+}
+
+fn smoothstep(fraction: f32) -> f32 {
+    let fraction = fraction.clamp(0.0, 1.0);
+    fraction * fraction * (3.0 - 2.0 * fraction)
 }
 
 pub fn is_dry_and_gentle(terrain: &BattlefieldTerrain, x: f32, z: f32) -> bool {
@@ -592,9 +602,16 @@ mod tests {
         let terrain = BattlefieldTerrain::generated(BattlefieldSeed(73));
         let before = terrain.clone();
         let horizon = VisualHorizon::from_terrain(&terrain, BattlefieldSeed(73));
+        assert_eq!(
+            horizon,
+            VisualHorizon::from_terrain(&terrain, BattlefieldSeed(73)),
+            "the render-only horizon palette must remain deterministic"
+        );
         let positions = horizon.positions();
         let colours = horizon.colours();
         let ring_len = VisualHorizon::SEGMENTS_PER_EDGE * 4;
+        let inner = square_perimeter(HALF_EXTENT, VisualHorizon::SEGMENTS_PER_EDGE);
+        let outer = square_perimeter(HORIZON_HALF_EXTENT, VisualHorizon::SEGMENTS_PER_EDGE);
 
         assert_eq!(
             positions.len(),
@@ -605,10 +622,32 @@ mod tests {
             horizon.indices().len(),
             ring_len * VisualHorizon::RADIAL_STEPS * 6
         );
-        for (position, colour) in positions[..ring_len].iter().zip(&colours[..ring_len]) {
+        for ((position, colour), (x, z)) in positions[..ring_len]
+            .iter()
+            .zip(&colours[..ring_len])
+            .zip(&inner)
+        {
             assert!(is_within_bounds(position[0], position[2]));
             close(position[1], terrain.height(position[0], position[2]));
-            assert_eq!(*colour, elevation_colour(position[1]));
+            assert_eq!(*colour, surface_colour(position[1], *x, *z));
+        }
+        for ring in 1..=VisualHorizon::RADIAL_STEPS {
+            let fraction = ring as f32 / VisualHorizon::RADIAL_STEPS as f32;
+            for (index, ((inner_x, inner_z), (outer_x, outer_z))) in
+                inner.iter().zip(&outer).enumerate()
+            {
+                let inner_colour =
+                    surface_colour(terrain.height(*inner_x, *inner_z), *inner_x, *inner_z);
+                let outer_colour = surface_colour(
+                    generated_height(*outer_x, *outer_z, BattlefieldSeed(73)),
+                    *outer_x,
+                    *outer_z,
+                );
+                assert_eq!(
+                    colours[ring * ring_len + index],
+                    blend_colour(inner_colour, outer_colour, smoothstep(fraction))
+                );
+            }
         }
         assert!(positions[ring_len..].iter().all(|position| {
             position.iter().all(|value| value.is_finite())
@@ -689,26 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn elevation_change_uses_current_deformed_surface_and_rejects_bounds() {
-        let mut terrain = BattlefieldTerrain::initial();
-        let before = terrain
-            .elevation_change_if_within_bounds(0.0, 0.0, 1.0, 0.0)
-            .unwrap();
-        terrain.apply_crater(centre(), Crater::default_development());
-        let after = terrain
-            .elevation_change_if_within_bounds(0.0, 0.0, 1.0, 0.0)
-            .unwrap();
-
-        assert_ne!(before, after);
-        assert!(
-            terrain
-                .elevation_change_if_within_bounds(HALF_EXTENT, 0.0, HALF_EXTENT + 1.0, 0.0)
-                .is_none()
-        );
-    }
-
-    #[test]
-    fn narrow_deep_crater_produces_a_repeatable_impassable_step() {
+    fn narrow_deep_crater_produces_a_repeatable_terrain_change() {
         let start = WorldPosition {
             x: -11.25,
             y: 0.0,
@@ -720,14 +740,12 @@ mod tests {
         first.apply_crater(start, crater);
         second.apply_crater(start, crater);
 
-        let first_change = first
-            .elevation_change_if_within_bounds(start.x, start.z, start.x + 1.0, start.z)
-            .unwrap();
-        let second_change = second
-            .elevation_change_if_within_bounds(start.x, start.z, start.x + 1.0, start.z)
-            .unwrap();
+        let first_change =
+            (first.height(start.x, start.z) - first.height(start.x + 1.0, start.z)).abs();
+        let second_change =
+            (second.height(start.x, start.z) - second.height(start.x + 1.0, start.z)).abs();
         assert_eq!(first_change, second_change);
-        assert!(first_change > crate::tank::MAX_MOVEMENT_ELEVATION_CHANGE);
+        assert!(first_change > 0.0);
     }
 
     #[test]
