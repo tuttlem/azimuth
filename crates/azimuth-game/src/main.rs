@@ -470,6 +470,16 @@ struct WaterVisual;
 #[derive(Component)]
 struct BuildingVisual;
 
+/// Render-only, indestructible terrain dressing. Its support is sampled from the authoritative
+/// terrain so explosions can make a boulder visibly fall without adding cover to combat rules.
+#[derive(Component)]
+struct BoulderVisual {
+    half_height: f32,
+    radius_x: f32,
+    radius_z: f32,
+    vertical_velocity: f32,
+}
+
 #[derive(Component)]
 struct ExplosionVisual {
     elapsed_seconds: f32,
@@ -700,7 +710,13 @@ fn main() {
     );
     let turn = initial_turn_state(&tanks);
     App::new()
-        .add_plugins(DefaultPlugins)
+        .add_plugins(DefaultPlugins.set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Azimuth".into(),
+                ..default()
+            }),
+            ..default()
+        }))
         .insert_resource(ClearColor(sky_colour()))
         .insert_resource(Tanks(tanks))
         .insert_resource(CurrentTurn(turn))
@@ -737,6 +753,7 @@ fn main() {
             Startup,
             (
                 load_weapon_icons,
+                maximize_primary_window,
                 spawn_battlefield_scene,
                 spawn_match_setup,
                 spawn_session_flow_overlay,
@@ -778,6 +795,7 @@ fn main() {
                     spawn_impact_effects,
                     update_impact_particles,
                     update_smoke_puffs,
+                    settle_boulders,
                     sync_battlefield_mesh,
                 )
                     .chain(),
@@ -1039,6 +1057,10 @@ fn spawn_battlefield_scene(
             ..default()
         }),
     });
+}
+
+fn maximize_primary_window(mut window: Single<&mut Window>) {
+    window.set_maximized(true);
 }
 
 /// Load once at startup so overlays and the rebuilt HUD share the exact same handles. The lookup
@@ -1816,6 +1838,7 @@ fn handle_quit_confirmation(
     }
 }
 
+#[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn sync_match_setup_ui(
     gate: Res<MatchSetupGate>,
     configuration: Res<PendingMatchConfiguration>,
@@ -4048,6 +4071,7 @@ fn advance_projectile(
     mut flight: ResMut<ProjectileFlight>,
     mut latest_impact: ResMut<LatestTerrainImpact>,
     mut turn: ResMut<CurrentTurn>,
+    boulders: Query<(&BoulderVisual, &Transform), With<BuildingVisual>>,
 ) {
     let Some(mut shot) = flight.0 else {
         return;
@@ -4157,12 +4181,13 @@ fn advance_projectile(
             let Some(mut child) = shot.children[index] else {
                 continue;
             };
-            match child.advance_with_terrain(
+            let advance = child.advance_with_terrain(
                 gravity.0,
                 wind.0,
                 SimulationLimits::BATTLEFIELD,
                 |x, z| terrain.0.height_if_within_bounds(x, z),
-            ) {
+            );
+            match boulder_impact(advance, child.position, &boulders) {
                 ProjectileAdvance::Active => shot.children[index] = Some(child),
                 ProjectileAdvance::TerrainImpact(impact) => {
                     let health_before = tanks.0.iter().map(|tank| tank.health).collect::<Vec<_>>();
@@ -4223,6 +4248,7 @@ fn advance_projectile(
         SimulationLimits::BATTLEFIELD,
         |x, z| terrain.0.height_if_within_bounds(x, z),
     );
+    let advance = boulder_impact(advance, shot.projectile.position, &boulders);
     if shot.is_deployment_carrier()
         && matches!(advance, ProjectileAdvance::Active)
         && shot.projectile.velocity.y <= 0.0
@@ -5446,17 +5472,108 @@ fn spawn_buildings(
     material: Handle<StandardMaterial>,
 ) {
     for building in buildings {
-        commands.spawn((
-            BuildingVisual,
-            Mesh3d(meshes.add(Cuboid::new(building.width, building.height, building.depth))),
-            MeshMaterial3d(material.clone()),
-            Transform::from_xyz(
-                building.position.x,
-                building.position.y + building.height / 2.0,
-                building.position.z,
-            )
-            .with_rotation(Quat::from_rotation_y(building.yaw_radians)),
-        ));
+        let main_scale = Vec3::new(
+            building.width * 0.55,
+            building.height * 0.5,
+            building.depth * 0.55,
+        );
+        let rock_mesh = meshes.add(Sphere::new(1.0));
+        commands
+            .spawn((
+                Name::new("Indestructible boulder"),
+                BuildingVisual,
+                BoulderVisual {
+                    half_height: building.height * 0.5,
+                    radius_x: building.width * 0.62,
+                    radius_z: building.depth * 0.62,
+                    vertical_velocity: 0.0,
+                },
+                GlobalTransform::default(),
+                Visibility::Inherited,
+                InheritedVisibility::VISIBLE,
+                ViewVisibility::default(),
+                Transform::from_xyz(
+                    building.position.x,
+                    building.position.y + building.height / 2.0,
+                    building.position.z,
+                )
+                .with_rotation(Quat::from_rotation_y(building.yaw_radians)),
+            ))
+            .with_children(|boulder| {
+                boulder.spawn((
+                    Mesh3d(rock_mesh.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform::from_scale(main_scale),
+                ));
+                // Two smaller lobes break the perfect ellipsoid into a smooth, natural rock.
+                boulder.spawn((
+                    Mesh3d(rock_mesh.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform::from_xyz(
+                        building.width * 0.26,
+                        -building.height * 0.08,
+                        building.depth * 0.12,
+                    )
+                    .with_scale(main_scale * 0.58),
+                ));
+                boulder.spawn((
+                    Mesh3d(rock_mesh.clone()),
+                    MeshMaterial3d(material.clone()),
+                    Transform::from_xyz(
+                        -building.width * 0.20,
+                        building.height * 0.10,
+                        -building.depth * 0.20,
+                    )
+                    .with_scale(main_scale * 0.43),
+                ));
+            });
+    }
+}
+
+fn boulder_impact(
+    advance: ProjectileAdvance,
+    position: WorldPosition,
+    boulders: &Query<(&BoulderVisual, &Transform), With<BuildingVisual>>,
+) -> ProjectileAdvance {
+    if !matches!(advance, ProjectileAdvance::Active) {
+        return advance;
+    }
+    boulders
+        .iter()
+        .find_map(|(boulder, transform)| {
+            let dx = (position.x - transform.translation.x) / boulder.radius_x;
+            let dz = (position.z - transform.translation.z) / boulder.radius_z;
+            let dy = (position.y - transform.translation.y) / boulder.half_height;
+            (dx * dx + dy * dy + dz * dz <= 1.0)
+                .then_some(ProjectileAdvance::TerrainImpact(TerrainImpact { position }))
+        })
+        .unwrap_or(advance)
+}
+
+fn settle_boulders(
+    setup: Res<MatchSetupGate>,
+    terrain: Res<BattlefieldState>,
+    gravity: Res<BattlefieldGravity>,
+    time: Res<Time>,
+    mut boulders: Query<(&mut BoulderVisual, &mut Transform), With<BuildingVisual>>,
+) {
+    if !setup.started {
+        return;
+    }
+    for (mut boulder, mut transform) in &mut boulders {
+        let ground = terrain
+            .0
+            .height(transform.translation.x, transform.translation.z);
+        let resting_y = ground + boulder.half_height;
+        if transform.translation.y > resting_y + 0.02 {
+            boulder.vertical_velocity -= gravity.0.downward_acceleration() * time.delta_secs();
+            transform.translation.y = (transform.translation.y
+                + boulder.vertical_velocity * time.delta_secs())
+            .max(resting_y);
+        } else {
+            transform.translation.y = resting_y;
+            boulder.vertical_velocity = 0.0;
+        }
     }
 }
 

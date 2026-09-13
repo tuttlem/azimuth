@@ -480,15 +480,15 @@ pub fn is_dry_and_gentle(terrain: &BattlefieldTerrain, x: f32, z: f32) -> bool {
             })
 }
 
-/// Builds are intentionally records rather than world objects. The renderer may turn them into
-/// cuboids, but gameplay never receives them as collision, cover, or damage data.
+/// Sparse dressing records become indestructible boulders in the renderer. They remain outside
+/// combat collision and damage rules, while their presentation can settle after terrain changes.
 pub fn generate_buildings(
     terrain: &BattlefieldTerrain,
     starts: &[(f32, f32)],
     mut seed: u64,
 ) -> Vec<BuildingPlacement> {
     let mut buildings = Vec::new();
-    for _ in 0..24 {
+    for _ in 0..20 {
         let x = random_range(&mut seed, -50.0, 50.0);
         let z = random_range(&mut seed, -50.0, 50.0);
         if !is_dry_and_gentle(terrain, x, z)
@@ -507,12 +507,12 @@ pub fn generate_buildings(
         };
         buildings.push(BuildingPlacement {
             position: base,
-            width: random_range(&mut seed, 1.5, 3.5),
-            depth: random_range(&mut seed, 1.5, 3.5),
-            height: random_range(&mut seed, 1.5, 5.0),
+            width: random_range(&mut seed, 2.5, 5.5),
+            depth: random_range(&mut seed, 2.0, 5.0),
+            height: random_range(&mut seed, 1.8, 4.5),
             yaw_radians: random_range(&mut seed, 0.0, std::f32::consts::TAU),
         });
-        if buildings.len() >= 8 {
+        if buildings.len() >= 6 {
             break;
         }
     }
