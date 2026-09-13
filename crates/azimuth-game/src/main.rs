@@ -33,7 +33,7 @@ use bevy::{
 };
 use combat::resolve_explosion;
 use environment::{EnvironmentPreset, PaletteProfile, SkyProfile, WindPolicy};
-use match_setup::{ControllerType, MatchConfiguration, PlayerConfiguration};
+use match_setup::{AiDifficulty, ControllerType, MatchConfiguration, PlayerConfiguration};
 use projectile::{
     Gravity, Projectile, ProjectileAdvance, SimulationLimits, TerrainImpact, Wind,
     azimuth_from_horizontal_direction,
@@ -59,6 +59,7 @@ const CAMERA_MIN_PITCH: f32 = -std::f32::consts::FRAC_PI_2 + 0.1;
 // from beneath the single-sided battlefield mesh without changing camera controls or intent.
 const CAMERA_MAX_PITCH: f32 = -0.08;
 const CAMERA_TRANSITION_SPEED: f32 = 5.0;
+const MENU_ORBIT_RADIANS_PER_SECOND: f32 = 0.035;
 const ACTIVE_PLAYER_CAMERA_DISTANCE: f32 = 16.0;
 const ACTIVE_PLAYER_CAMERA_HEIGHT: f32 = 1.8;
 const ACTIVE_PLAYER_CAMERA_PITCH: f32 = -0.35;
@@ -310,6 +311,9 @@ struct MatchSetupGate {
     selected_slot: usize,
 }
 
+#[derive(Resource, Default)]
+struct StartMatchRequested(bool);
+
 #[derive(Resource)]
 struct PendingMatchConfiguration(MatchConfiguration);
 
@@ -325,6 +329,43 @@ struct DamageAccounting {
 struct MatchSetupOverlay;
 #[derive(Component)]
 struct MatchSetupDetails;
+
+#[derive(Component, Clone, Copy)]
+enum SetupAction {
+    PlayerCount(i32),
+    Controller(PlayerId, ControllerType),
+    Difficulty(PlayerId, AiDifficulty),
+    EditName(PlayerId),
+    Environment(EnvironmentPreset),
+    Start,
+}
+
+#[derive(Component)]
+struct SetupPlayerCard(PlayerId);
+
+#[derive(Component)]
+struct SetupPlayerSummary(PlayerId);
+
+#[derive(Component)]
+struct SetupPlayerName(PlayerId);
+
+#[derive(Component)]
+struct SetupDifficultyControl(PlayerId, AiDifficulty);
+
+#[derive(Component)]
+struct SetupControllerButton(PlayerId, ControllerType);
+
+#[derive(Component)]
+struct SetupEnvironmentCard(EnvironmentPreset);
+
+#[derive(Component)]
+struct QuitConfirmOverlay;
+
+#[derive(Component, Clone, Copy)]
+enum QuitAction {
+    ReturnToSetup,
+    Cancel,
+}
 
 #[derive(Resource)]
 struct ProjectileVisualAssets {
@@ -678,6 +719,7 @@ fn main() {
         .insert_resource(MovementFrame::default())
         .insert_resource(CameraAimReset::default())
         .insert_resource(MatchSetupGate::default())
+        .insert_resource(StartMatchRequested::default())
         .insert_resource(PendingMatchConfiguration(configuration.clone()))
         .insert_resource(GameSession::new(MatchConfiguration::default().players))
         .insert_resource(DamageAccounting::default())
@@ -708,7 +750,11 @@ fn main() {
                 (
                     update_shot_presentation,
                     update_battlefield_camera,
+                    rotate_menu_camera,
+                    handle_setup_clicks,
                     update_match_setup,
+                    sync_match_setup_ui,
+                    handle_quit_confirmation,
                     select_weapon_input,
                     select_weapon_slot,
                     select_movement_action,
@@ -1101,7 +1147,7 @@ fn spawn_match_setup(mut commands: Commands) {
         .with_children(|root| {
             root.spawn((
                 Node {
-                    width: px(500.0),
+                    width: px(900.0),
                     padding: UiRect::all(px(28.0)),
                     row_gap: px(14.0),
                     flex_direction: FlexDirection::Column,
@@ -1114,21 +1160,26 @@ fn spawn_match_setup(mut commands: Commands) {
             .with_children(|panel| {
                 setup_text(panel, "AZIMUTH - MATCH SETUP", 30.0, UI_ACCENT);
                 panel.spawn((
-                    MatchSetupDetails,
-                    Text::new(""),
+                    Node { column_gap: px(10.0), align_items: AlignItems::Center, ..default() },
+                )).with_children(|row| {
+                    setup_button(row, "-", SetupAction::PlayerCount(-1));
+                    row.spawn((MatchSetupDetails, Text::new("PLAYERS: 2"), TextFont { font_size: 20.0, ..default() }, TextColor(UI_TEXT)));
+                    setup_button(row, "+", SetupAction::PlayerCount(1));
+                });
+                panel.spawn((Node { column_gap: px(8.0), flex_wrap: FlexWrap::Wrap, ..default() },))
+                    .with_children(|cards| for number in 1..=8 { spawn_setup_player_card(cards, number); });
+                setup_text(panel, "SELECT WORLD", 18.0, UI_ACCENT);
+                panel.spawn((Node { column_gap: px(8.0), flex_wrap: FlexWrap::Wrap, ..default() },))
+                    .with_children(|worlds| for environment in EnvironmentPreset::ALL { spawn_environment_card(worlds, environment); });
+                panel.spawn((
+                    Text::new("Click a player name to edit it, then type. Choose a world and press Start."),
                     TextFont {
                         font_size: 18.0,
                         ..default()
                     },
                     TextColor(UI_TEXT),
                 ));
-                setup_text(
-                    panel,
-                    "2-8: COUNT | UP/DOWN: SLOT | E: ENVIRONMENT | TAB: HUMAN/AI | D: AI LEVEL | CTRL+R: REROLL AI",
-                    16.0,
-                    UI_MUTED,
-                );
-                setup_text(panel, "PRESS ENTER TO START MATCH", 18.0, UI_ACCENT);
+                setup_button(panel, "START MATCH", SetupAction::Start);
             });
         });
 }
@@ -1483,10 +1534,422 @@ fn setup_text(parent: &mut ChildSpawnerCommands, value: &str, font_size: f32, co
     ));
 }
 
+fn setup_button(parent: &mut ChildSpawnerCommands, label: &str, action: SetupAction) {
+    let mut button = parent.spawn((
+        Button,
+        action,
+        Node {
+            padding: UiRect::axes(px(12.0), px(7.0)),
+            border: UiRect::all(px(1.0)),
+            ..default()
+        },
+        BackgroundColor(UI_PANEL),
+        BorderColor::all(UI_ACCENT),
+        Text::new(label),
+        TextFont {
+            font_size: 17.0,
+            ..default()
+        },
+        TextColor(UI_TEXT),
+    ));
+    if let SetupAction::Controller(id, controller) = action {
+        button.insert(SetupControllerButton(id, controller));
+    }
+}
+
+fn spawn_setup_player_card(parent: &mut ChildSpawnerCommands, number: usize) {
+    let id = PlayerId(number as u8);
+    parent
+        .spawn((
+            SetupPlayerCard(id),
+            Node {
+                width: px(205.0),
+                padding: UiRect::all(px(8.0)),
+                row_gap: px(5.0),
+                flex_direction: FlexDirection::Column,
+                border: UiRect::all(px(1.0)),
+                ..default()
+            },
+            BackgroundColor(UI_PANEL),
+            BorderColor::all(UI_MUTED),
+        ))
+        .with_children(|card| {
+            card.spawn((
+                Button,
+                SetupAction::EditName(id),
+                SetupPlayerName(id),
+                Node {
+                    padding: UiRect::axes(px(8.0), px(5.0)),
+                    border: UiRect::all(px(1.0)),
+                    ..default()
+                },
+                BackgroundColor(UI_PANEL),
+                BorderColor::all(UI_ACCENT),
+                Text::new(format!("PLAYER {number}")),
+                TextFont {
+                    font_size: 16.0,
+                    ..default()
+                },
+                TextColor(UI_TEXT),
+            ));
+            card.spawn((
+                SetupPlayerSummary(id),
+                Text::new("HUMAN"),
+                TextFont {
+                    font_size: 14.0,
+                    ..default()
+                },
+                TextColor(UI_MUTED),
+            ));
+            card.spawn((Node {
+                column_gap: px(4.0),
+                ..default()
+            },))
+                .with_children(|controls| {
+                    setup_button(
+                        controls,
+                        "HUMAN",
+                        SetupAction::Controller(id, ControllerType::Human),
+                    );
+                    setup_button(
+                        controls,
+                        "AI",
+                        SetupAction::Controller(id, ControllerType::Ai),
+                    );
+                });
+            card.spawn((
+                Node {
+                    column_gap: px(3.0),
+                    ..default()
+                },
+                SetupDifficultyControl(id, AiDifficulty::Easy),
+            ))
+            .with_children(|levels| {
+                levels.spawn((
+                    Text::new("LEVEL:"),
+                    TextFont {
+                        font_size: 13.0,
+                        ..default()
+                    },
+                    TextColor(UI_MUTED),
+                ));
+                for (label, difficulty) in [
+                    ("1", AiDifficulty::Easy),
+                    ("2", AiDifficulty::Normal),
+                    ("3", AiDifficulty::Hard),
+                ] {
+                    levels.spawn((
+                        Button,
+                        SetupAction::Difficulty(id, difficulty),
+                        SetupDifficultyControl(id, difficulty),
+                        Node {
+                            width: px(24.0),
+                            height: px(22.0),
+                            justify_content: JustifyContent::Center,
+                            align_items: AlignItems::Center,
+                            ..default()
+                        },
+                        BackgroundColor(UI_PANEL),
+                        Text::new(label),
+                        TextFont {
+                            font_size: 14.0,
+                            ..default()
+                        },
+                        TextColor(UI_TEXT),
+                    ));
+                }
+            });
+        });
+}
+
+fn spawn_environment_card(parent: &mut ChildSpawnerCommands, environment: EnvironmentPreset) {
+    parent.spawn((
+        Button,
+        SetupAction::Environment(environment),
+        SetupEnvironmentCard(environment),
+        Node {
+            width: px(136.0),
+            padding: UiRect::all(px(8.0)),
+            row_gap: px(4.0),
+            flex_direction: FlexDirection::Column,
+            border: UiRect::all(px(1.0)),
+            ..default()
+        },
+        BackgroundColor(UI_PANEL),
+        BorderColor::all(UI_MUTED),
+        Text::new(format!(
+            "{}\n{}",
+            environment.label(),
+            environment.summary()
+        )),
+        TextFont {
+            font_size: 13.0,
+            ..default()
+        },
+        TextColor(UI_TEXT),
+    ));
+}
+
+fn handle_setup_clicks(
+    mut gate: ResMut<MatchSetupGate>,
+    mut configuration: ResMut<PendingMatchConfiguration>,
+    mut start: ResMut<StartMatchRequested>,
+    actions: Query<(&Interaction, &SetupAction), Changed<Interaction>>,
+) {
+    if gate.started {
+        return;
+    }
+    for (interaction, action) in &actions {
+        if *interaction != Interaction::Pressed {
+            continue;
+        }
+        match *action {
+            SetupAction::PlayerCount(delta) => {
+                let count = (configuration.0.players.len() as i32 + delta).clamp(2, 8) as usize;
+                configuration
+                    .0
+                    .set_player_count(count)
+                    .expect("setup count is bounded");
+                gate.selected_slot = gate.selected_slot.min(count - 1);
+            }
+            SetupAction::Controller(id, controller) => {
+                configuration.0.set_controller(id, controller)
+            }
+            SetupAction::EditName(id) => gate.selected_slot = id.0.saturating_sub(1) as usize,
+            SetupAction::Difficulty(id, difficulty) => {
+                if let Some(player) = configuration
+                    .0
+                    .players
+                    .iter_mut()
+                    .find(|player| player.id == id)
+                    && player.controller == ControllerType::Ai
+                {
+                    player.ai_difficulty = difficulty;
+                }
+            }
+            SetupAction::Environment(environment) => configuration.0.environment = environment,
+            SetupAction::Start => start.0 = true,
+        }
+    }
+}
+
+fn handle_quit_confirmation(
+    keyboard: Res<ButtonInput<KeyCode>>,
+    mut gate: ResMut<MatchSetupGate>,
+    mut commands: Commands,
+    overlays: Query<Entity, With<QuitConfirmOverlay>>,
+    choices: Query<(&Interaction, &QuitAction), Changed<Interaction>>,
+) {
+    if keyboard.just_pressed(KeyCode::Escape) && gate.started && overlays.is_empty() {
+        commands.spawn((
+            QuitConfirmOverlay,
+            Node {
+                width: percent(100.0),
+                height: percent(100.0),
+                position_type: PositionType::Absolute,
+                justify_content: JustifyContent::Center,
+                align_items: AlignItems::Center,
+                flex_direction: FlexDirection::Column,
+                row_gap: px(14.0),
+                ..default()
+            },
+            BackgroundColor(UI_OVERLAY),
+            GlobalZIndex(500),
+            Text::new("QUIT CURRENT MATCH?"),
+            TextFont {
+                font_size: 30.0,
+                ..default()
+            },
+            TextColor(UI_TEXT),
+        ));
+        commands.spawn((
+            Button,
+            QuitConfirmOverlay,
+            QuitAction::ReturnToSetup,
+            GlobalZIndex(501),
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(38.0),
+                top: percent(58.0),
+                padding: UiRect::all(px(12.0)),
+                ..default()
+            },
+            BackgroundColor(UI_ACCENT),
+            Text::new("YES - RETURN TO SETUP"),
+            TextFont {
+                font_size: 18.0,
+                ..default()
+            },
+            TextColor(UI_TEXT),
+        ));
+        commands.spawn((
+            Button,
+            QuitConfirmOverlay,
+            QuitAction::Cancel,
+            GlobalZIndex(501),
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(58.0),
+                top: percent(58.0),
+                padding: UiRect::all(px(12.0)),
+                ..default()
+            },
+            BackgroundColor(UI_PANEL),
+            Text::new("CANCEL"),
+            TextFont {
+                font_size: 18.0,
+                ..default()
+            },
+            TextColor(UI_TEXT),
+        ));
+    }
+    for (interaction, choice) in &choices {
+        if *interaction == Interaction::Pressed {
+            if matches!(choice, QuitAction::ReturnToSetup) {
+                gate.started = false;
+                spawn_match_setup(commands.reborrow());
+            }
+            for entity in &overlays {
+                commands.entity(entity).despawn();
+            }
+        }
+    }
+}
+
+fn sync_match_setup_ui(
+    gate: Res<MatchSetupGate>,
+    configuration: Res<PendingMatchConfiguration>,
+    mut details: Query<
+        &mut Text,
+        (
+            With<MatchSetupDetails>,
+            Without<SetupPlayerSummary>,
+            Without<SetupPlayerName>,
+        ),
+    >,
+    mut cards: Query<(&SetupPlayerCard, &mut Visibility), (Without<SetupDifficultyControl>,)>,
+    mut summaries: Query<
+        (&SetupPlayerSummary, &mut Text),
+        (Without<MatchSetupDetails>, Without<SetupPlayerName>),
+    >,
+    mut names: Query<
+        (&SetupPlayerName, &mut Text),
+        (Without<MatchSetupDetails>, Without<SetupPlayerSummary>),
+    >,
+    mut difficulty_controls: Query<
+        (
+            &SetupDifficultyControl,
+            &mut Visibility,
+            Option<&mut BackgroundColor>,
+        ),
+        (
+            Without<SetupPlayerCard>,
+            Without<SetupEnvironmentCard>,
+            Without<SetupControllerButton>,
+        ),
+    >,
+    mut controller_buttons: Query<
+        (&SetupControllerButton, &mut BackgroundColor),
+        (
+            Without<SetupDifficultyControl>,
+            Without<SetupEnvironmentCard>,
+        ),
+    >,
+    mut worlds: Query<
+        (
+            &SetupEnvironmentCard,
+            &mut BackgroundColor,
+            &mut BorderColor,
+        ),
+        (
+            Without<SetupDifficultyControl>,
+            Without<SetupControllerButton>,
+        ),
+    >,
+) {
+    if gate.started {
+        return;
+    }
+    for mut text in &mut details {
+        text.0 = format!("PLAYERS: {}", configuration.0.players.len());
+    }
+    for (card, mut visibility) in &mut cards {
+        *visibility = if (card.0.0 as usize) <= configuration.0.players.len() {
+            Visibility::Inherited
+        } else {
+            Visibility::Hidden
+        };
+    }
+    for (summary, mut text) in &mut summaries {
+        if let Some(player) = configuration
+            .0
+            .players
+            .iter()
+            .find(|player| player.id == summary.0)
+        {
+            text.0 = player.display_name.clone();
+        }
+    }
+    for (name, mut text) in &mut names {
+        if let Some(player) = configuration
+            .0
+            .players
+            .iter()
+            .find(|player| player.id == name.0)
+        {
+            text.0 = player.display_name.to_uppercase();
+        }
+    }
+    for (control, mut visibility, background) in &mut difficulty_controls {
+        if let Some(player) = configuration
+            .0
+            .players
+            .iter()
+            .find(|player| player.id == control.0)
+        {
+            *visibility = if player.controller == ControllerType::Ai {
+                Visibility::Inherited
+            } else {
+                Visibility::Hidden
+            };
+            if let Some(mut background) = background {
+                background.0 = if player.ai_difficulty == control.1 {
+                    Color::srgb(0.12, 0.42, 0.86)
+                } else {
+                    UI_PANEL
+                };
+            }
+        }
+    }
+    for (button, mut background) in &mut controller_buttons {
+        if let Some(player) = configuration
+            .0
+            .players
+            .iter()
+            .find(|player| player.id == button.0)
+        {
+            background.0 = if player.controller == button.1 {
+                Color::srgb(0.12, 0.42, 0.86)
+            } else {
+                UI_PANEL
+            };
+        }
+    }
+    for (world, mut background, mut border) in &mut worlds {
+        let active = world.0 == configuration.0.environment;
+        background.0 = if active {
+            Color::srgb(0.10, 0.27, 0.36)
+        } else {
+            UI_PANEL
+        };
+        *border = BorderColor::all(if active { UI_ACCENT } else { UI_MUTED });
+    }
+}
+
 #[allow(clippy::too_many_arguments, clippy::type_complexity)]
 fn update_match_setup(
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut gate: ResMut<MatchSetupGate>,
+    setup_state: (ResMut<MatchSetupGate>, ResMut<StartMatchRequested>),
     mut configuration: ResMut<PendingMatchConfiguration>,
     mut tanks: ResMut<Tanks>,
     mut turn: ResMut<CurrentTurn>,
@@ -1518,6 +1981,7 @@ fn update_match_setup(
     mut commands: Commands,
     mut details: Query<&mut Text, With<MatchSetupDetails>>,
 ) {
+    let (mut gate, mut start_requested) = setup_state;
     let (
         mut terrain,
         mut match_seed,
@@ -1632,12 +2096,13 @@ fn update_match_setup(
             configuration.0.environment.summary()
         );
     }
-    if keyboard.just_pressed(KeyCode::Enter) {
+    if keyboard.just_pressed(KeyCode::Enter) || start_requested.0 {
         configuration.0.trim_human_names();
     }
-    if (keyboard.just_pressed(KeyCode::Enter) || transition_start)
+    if (keyboard.just_pressed(KeyCode::Enter) || start_requested.0 || transition_start)
         && configuration.0.validate().is_ok()
     {
+        start_requested.0 = false;
         let ids = configuration
             .0
             .players
@@ -4566,6 +5031,30 @@ fn update_battlefield_camera(
     // controller, so a slow transition can never delay input, projectile resolution, or handoff.
     interpolate_camera_pose(&mut controller, time.delta_secs());
 
+    *transform = camera_transform(&controller);
+}
+
+/// Setup stays visually alive by orbiting the already-generated battlefield at a deliberately
+/// slow rate. The tactical camera takes over immediately once a match begins.
+fn rotate_menu_camera(
+    setup: Res<MatchSetupGate>,
+    time: Res<Time>,
+    camera: Single<(&mut Transform, &mut BattlefieldCamera)>,
+) {
+    if setup.started {
+        return;
+    }
+    let (mut transform, mut controller) = camera.into_inner();
+    controller.target = Vec3::new(0.0, 5.0, 0.0);
+    controller.yaw += MENU_ORBIT_RADIANS_PER_SECOND * time.delta_secs();
+    controller.pitch = -0.42;
+    controller.distance = 108.0;
+    controller.desired_pose = CameraPose {
+        target: controller.target,
+        yaw: controller.yaw,
+        pitch: controller.pitch,
+        distance: controller.distance,
+    };
     *transform = camera_transform(&controller);
 }
 

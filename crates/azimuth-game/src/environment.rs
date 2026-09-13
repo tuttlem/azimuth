@@ -34,7 +34,6 @@ pub enum EnvironmentPreset {
     Bowl,
 }
 impl EnvironmentPreset {
-    #[cfg(test)]
     pub const ALL: [Self; 6] = [
         Self::Earth,
         Self::Moon,
