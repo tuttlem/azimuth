@@ -415,8 +415,10 @@ mod tests {
     fn seeded_starts_are_dry_supported_separated_and_repeatable_for_multiplayer() {
         for seed in [3, 17, 42, 99, 4_242] {
             for count in [2, 4, 8] {
-                let terrain =
-                    BattlefieldTerrain::generated(crate::battlefield::BattlefieldSeed(seed));
+                let terrain = BattlefieldTerrain::generated(
+                    crate::battlefield::BattlefieldSeed(seed),
+                    crate::environment::TerrainProfile::Standard,
+                );
                 let players = (1..=count)
                     .map(|number| PlayerId(number as u8))
                     .collect::<Vec<_>>();

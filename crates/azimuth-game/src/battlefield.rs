@@ -1,3 +1,4 @@
+use crate::environment::{PaletteProfile, TerrainProfile};
 use crate::world::{WorldPosition, WorldVector};
 
 /// One large default battlefield. At maximum 45-degree power, ordinary shells can still cross
@@ -45,7 +46,11 @@ impl VisualHorizon {
     // authoritative terrain surface.
     const RADIAL_STEPS: usize = 8;
 
-    pub fn from_terrain(terrain: &BattlefieldTerrain, seed: BattlefieldSeed) -> Self {
+    pub fn from_terrain(
+        terrain: &BattlefieldTerrain,
+        seed: BattlefieldSeed,
+        palette: PaletteProfile,
+    ) -> Self {
         let inner = square_perimeter(HALF_EXTENT, Self::SEGMENTS_PER_EDGE);
         let outer = square_perimeter(HORIZON_HALF_EXTENT, Self::SEGMENTS_PER_EDGE);
         let ring_len = inner.len();
@@ -61,7 +66,8 @@ impl VisualHorizon {
                 let x = inner_x + (outer_x - inner_x) * fraction;
                 let z = inner_z + (outer_z - inner_z) * fraction;
                 let inner_height = terrain.height(*inner_x, *inner_z);
-                let outer_height = generated_height(*outer_x, *outer_z, seed);
+                let outer_height =
+                    generated_height(*outer_x, *outer_z, seed, TerrainProfile::Standard);
                 // Keep the inner ring exactly welded to the mutable terrain, then let the
                 // exterior fall away very gently so the surrounding plane reads as a distant
                 // planetary surface rather than a perfectly flat tabletop.
@@ -69,8 +75,8 @@ impl VisualHorizon {
                     - HORIZON_CURVATURE_DROP * smoothstep(fraction);
                 positions.push([x, height, z]);
                 colours.push(blend_colour(
-                    surface_colour(inner_height, *inner_x, *inner_z),
-                    surface_colour(outer_height, *outer_x, *outer_z),
+                    surface_colour(inner_height, *inner_x, *inner_z, palette),
+                    surface_colour(outer_height, *outer_x, *outer_z, palette),
                     colour_fraction,
                 ));
             }
@@ -189,12 +195,12 @@ impl BattlefieldTerrain {
 
     /// Macro shapes create the artillery decisions; local variation merely stops their slopes
     /// feeling synthetic. Keeping both here makes the rendered mesh and gameplay query one world.
-    pub fn generated(seed: BattlefieldSeed) -> Self {
+    pub fn generated(seed: BattlefieldSeed, profile: TerrainProfile) -> Self {
         let mut heights = Vec::with_capacity(VERTICES_PER_SIDE * VERTICES_PER_SIDE);
         for z_index in 0..VERTICES_PER_SIDE {
             for x_index in 0..VERTICES_PER_SIDE {
                 let (x, z) = vertex_position(x_index, z_index);
-                heights.push(generated_height(x, z, seed));
+                heights.push(generated_height(x, z, seed, profile));
             }
         }
         Self { heights }
@@ -320,14 +326,14 @@ impl BattlefieldTerrain {
 
     /// Presentation is derived from current terrain height so a crater cannot reveal stale or
     /// uninitialised colour. Water itself is a separate flat presentation plane.
-    pub fn mesh_colours(&self) -> Vec<[f32; 4]> {
+    pub fn mesh_colours(&self, palette: PaletteProfile) -> Vec<[f32; 4]> {
         self.heights
             .iter()
             .copied()
             .enumerate()
             .map(|(index, height)| {
                 let (x, z) = vertex_position(index % VERTICES_PER_SIDE, index / VERTICES_PER_SIDE);
-                surface_colour(height, x, z)
+                surface_colour(height, x, z, palette)
             })
             .collect()
     }
@@ -382,8 +388,22 @@ pub fn elevation_colour(height: f32) -> [f32; 4] {
 
 /// A tiny deterministic colour wobble gives the low-poly terrain surface character without
 /// becoming terrain data: crater/mound physics still depend only on `heights`.
-fn surface_colour(height: f32, x: f32, z: f32) -> [f32; 4] {
+fn surface_colour(height: f32, x: f32, z: f32, palette: PaletteProfile) -> [f32; 4] {
     let mut colour = elevation_colour(height);
+    let base = [colour[0], colour[1], colour[2]];
+    let tint = match palette {
+        PaletteProfile::Earth => base,
+        PaletteProfile::Moon => {
+            let shade = (height / 28.0).clamp(0.18, 0.72);
+            [shade, shade, shade * 1.05]
+        }
+        PaletteProfile::Storm => [base[0] * 0.52, base[1] * 0.58, base[2] * 0.68],
+        PaletteProfile::Crusher => {
+            let heat = (height / 28.0).clamp(0.0, 1.0);
+            [0.50 + heat * 0.34, 0.18 + heat * 0.36, 0.05 + heat * 0.08]
+        }
+    };
+    colour[..3].copy_from_slice(&tint);
     let mottle = ((x * 0.37).sin() * (z * 0.29).cos()) * 0.035;
     for channel in &mut colour[..3] {
         *channel = (*channel + mottle).clamp(0.0, 1.0);
@@ -509,7 +529,7 @@ fn square_perimeter(half_extent: f32, segments_per_edge: usize) -> Vec<(f32, f32
     points
 }
 
-fn generated_height(x: f32, z: f32, seed: BattlefieldSeed) -> f32 {
+fn generated_height(x: f32, z: f32, seed: BattlefieldSeed, profile: TerrainProfile) -> f32 {
     let mut random = seed.0;
     let mountain_x = random_range(&mut random, -42.0, -24.0);
     let mountain_z = random_range(&mut random, -30.0, 30.0);
@@ -550,7 +570,16 @@ fn generated_height(x: f32, z: f32, seed: BattlefieldSeed) -> f32 {
         + (x * random_range(&mut random, 0.16, 0.24) + z * random_range(&mut random, 0.12, 0.20))
             .sin()
             * 0.35;
-    6.0 + mountain + ridge + bowl + knolls + local
+    let central_bowl = smooth_bump(x, z, 42.0, 42.0) * -13.0;
+    6.0 + mountain
+        + ridge
+        + if profile == TerrainProfile::Bowl {
+            central_bowl
+        } else {
+            bowl
+        }
+        + knolls
+        + local
 }
 
 fn authored_fixture_height(x: f32, z: f32) -> f32 {
@@ -606,12 +635,13 @@ mod tests {
 
     #[test]
     fn visual_horizon_welds_to_the_authoritative_edge_without_expanding_it() {
-        let terrain = BattlefieldTerrain::generated(BattlefieldSeed(73));
+        let terrain = BattlefieldTerrain::generated(BattlefieldSeed(73), TerrainProfile::Standard);
         let before = terrain.clone();
-        let horizon = VisualHorizon::from_terrain(&terrain, BattlefieldSeed(73));
+        let horizon =
+            VisualHorizon::from_terrain(&terrain, BattlefieldSeed(73), PaletteProfile::Earth);
         assert_eq!(
             horizon,
-            VisualHorizon::from_terrain(&terrain, BattlefieldSeed(73)),
+            VisualHorizon::from_terrain(&terrain, BattlefieldSeed(73), PaletteProfile::Earth),
             "the render-only horizon palette must remain deterministic"
         );
         let positions = horizon.positions();
@@ -636,19 +666,32 @@ mod tests {
         {
             assert!(is_within_bounds(position[0], position[2]));
             close(position[1], terrain.height(position[0], position[2]));
-            assert_eq!(*colour, surface_colour(position[1], *x, *z));
+            assert_eq!(
+                *colour,
+                surface_colour(position[1], *x, *z, PaletteProfile::Earth)
+            );
         }
         for ring in 1..=VisualHorizon::RADIAL_STEPS {
             let fraction = ring as f32 / VisualHorizon::RADIAL_STEPS as f32;
             for (index, ((inner_x, inner_z), (outer_x, outer_z))) in
                 inner.iter().zip(&outer).enumerate()
             {
-                let inner_colour =
-                    surface_colour(terrain.height(*inner_x, *inner_z), *inner_x, *inner_z);
+                let inner_colour = surface_colour(
+                    terrain.height(*inner_x, *inner_z),
+                    *inner_x,
+                    *inner_z,
+                    PaletteProfile::Earth,
+                );
                 let outer_colour = surface_colour(
-                    generated_height(*outer_x, *outer_z, BattlefieldSeed(73)),
+                    generated_height(
+                        *outer_x,
+                        *outer_z,
+                        BattlefieldSeed(73),
+                        TerrainProfile::Standard,
+                    ),
                     *outer_x,
                     *outer_z,
+                    PaletteProfile::Earth,
                 );
                 assert_eq!(
                     colours[ring * ring_len + index],
@@ -757,9 +800,10 @@ mod tests {
 
     #[test]
     fn generated_battlefields_are_reproducible_varied_and_large_scale() {
-        let first = BattlefieldTerrain::generated(BattlefieldSeed(42));
-        let repeated = BattlefieldTerrain::generated(BattlefieldSeed(42));
-        let different = BattlefieldTerrain::generated(BattlefieldSeed(43));
+        let first = BattlefieldTerrain::generated(BattlefieldSeed(42), TerrainProfile::Standard);
+        let repeated = BattlefieldTerrain::generated(BattlefieldSeed(42), TerrainProfile::Standard);
+        let different =
+            BattlefieldTerrain::generated(BattlefieldSeed(43), TerrainProfile::Standard);
         assert_eq!(first, repeated);
         assert_ne!(first, different);
         assert_eq!(first.mesh_positions().len(), 65 * 65);
@@ -797,7 +841,7 @@ mod tests {
 
     #[test]
     fn elevation_colours_and_dressing_are_bounded_and_deterministic() {
-        let terrain = BattlefieldTerrain::generated(BattlefieldSeed(9));
+        let terrain = BattlefieldTerrain::generated(BattlefieldSeed(9), TerrainProfile::Standard);
         let low = elevation_colour(1.0);
         let high = elevation_colour(30.0);
         assert!(
@@ -818,15 +862,15 @@ mod tests {
 
     #[test]
     fn surface_mottle_is_deterministic_and_does_not_change_height_queries() {
-        let terrain = BattlefieldTerrain::generated(BattlefieldSeed(23));
+        let terrain = BattlefieldTerrain::generated(BattlefieldSeed(23), TerrainProfile::Standard);
         let before = terrain.height(3.0, -4.0);
         assert_eq!(
-            surface_colour(8.0, 3.0, -4.0),
-            surface_colour(8.0, 3.0, -4.0)
+            surface_colour(8.0, 3.0, -4.0, PaletteProfile::Earth),
+            surface_colour(8.0, 3.0, -4.0, PaletteProfile::Earth)
         );
         assert_ne!(
-            surface_colour(8.0, 3.0, -4.0),
-            surface_colour(8.0, 18.0, 11.0)
+            surface_colour(8.0, 3.0, -4.0, PaletteProfile::Earth),
+            surface_colour(8.0, 18.0, 11.0, PaletteProfile::Earth)
         );
         assert_eq!(terrain.height(3.0, -4.0), before);
     }

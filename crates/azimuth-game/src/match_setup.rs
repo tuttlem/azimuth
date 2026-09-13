@@ -1,5 +1,6 @@
 #![allow(dead_code)]
 
+use crate::environment::EnvironmentPreset;
 use crate::tank::PlayerId;
 
 pub const MIN_PLAYERS: usize = 2;
@@ -102,6 +103,7 @@ pub struct PlayerConfiguration {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MatchConfiguration {
     pub players: Vec<PlayerConfiguration>,
+    pub environment: EnvironmentPreset,
     name_cursor: usize,
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -124,8 +126,12 @@ impl MatchConfiguration {
         }
         Ok(Self {
             players: (1..=count).map(Self::human_slot).collect(),
+            environment: EnvironmentPreset::Earth,
             name_cursor: 0,
         })
+    }
+    pub fn cycle_environment(&mut self) {
+        self.environment = self.environment.next();
     }
     fn human_slot(number: usize) -> PlayerConfiguration {
         let human_name = format!("Player {number}");

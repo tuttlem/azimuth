@@ -2,6 +2,7 @@ mod ai;
 mod aiming;
 mod battlefield;
 mod combat;
+mod environment;
 mod match_setup;
 mod projectile;
 #[allow(dead_code)]
@@ -29,6 +30,7 @@ use bevy::{
     render::render_resource::PrimitiveTopology,
 };
 use combat::resolve_explosion;
+use environment::{EnvironmentPreset, PaletteProfile, SkyProfile, WindPolicy};
 use match_setup::{ControllerType, MatchConfiguration, PlayerConfiguration};
 use projectile::{
     Gravity, Projectile, ProjectileAdvance, SimulationLimits, TerrainImpact, Wind,
@@ -72,8 +74,11 @@ const AIM_REPEAT_DELAY_SECONDS: f32 = 0.3;
 const AIM_REPEAT_INTERVAL_SECONDS: f32 = 0.1;
 const TURRET_DINK_INTERVAL_SECONDS: f32 = 0.07;
 const PROJECTILE_FIXED_HZ: f64 = 120.0;
+#[cfg(test)]
 const DEVELOPMENT_GRAVITY: f32 = 8.0;
+#[cfg(test)]
 const MINIMUM_WIND_STRENGTH: f32 = 0.75;
+#[cfg(test)]
 const MAXIMUM_WIND_STRENGTH: f32 = 1.75;
 /// The simulation's wind value is an acceleration.  The HUD presents the same relative
 /// intensity on a familiar, player-facing kilometres-per-hour scale.
@@ -137,6 +142,7 @@ struct CameraPose {
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum CameraPresentationIntent {
     ActivePlayer(PlayerId),
+    MovementPlayer(PlayerId),
     HumanShotFollow(Projectile),
     AiTacticalShot {
         shooter: PlayerId,
@@ -268,12 +274,26 @@ struct BattlefieldGravity(Gravity);
 struct BattlefieldWind(Wind);
 
 #[derive(Resource, Default)]
+struct TurnwindState {
+    last_player: Option<PlayerId>,
+    handoff_ordinal: u64,
+}
+
+#[derive(Resource)]
+struct SkyPresentation(SkyProfile);
+
+#[derive(Resource, Default)]
 struct MovementFeedback(Option<MovementRejection>);
 
 /// Space completes movement, but normally also fires. This frame-local latch prevents the
 /// completion press from being interpreted as the newly active player's shot.
 #[derive(Resource, Default)]
 struct MovementCompletionThisFrame(bool);
+
+/// Captures the hull orientation on entering movement mode so repeated arrow presses remain in
+/// one player-facing frame even though each successful step updates the tank's body direction.
+#[derive(Resource, Default)]
+struct MovementFrame(Option<HorizontalDirection>);
 
 /// Keyboard turret adjustments deliberately end free camera exploration. This presentation-only
 /// latch restores the behind-the-tank aiming view on the next camera update.
@@ -389,6 +409,8 @@ struct BattlefieldVisual;
 
 #[derive(Component)]
 struct HorizonVisual;
+#[derive(Component)]
+struct CloudVisual;
 
 #[derive(Component)]
 struct WaterVisual;
@@ -619,8 +641,11 @@ fn main() {
         .map(|player| player.id)
         .collect::<Vec<_>>();
     let match_seed = MatchSeed(BattlefieldSeed(select_match_seed()));
-    let (terrain, tanks, dressing, wind) =
-        generate_match_world(round_seed(match_seed.0, 1), &player_ids);
+    let (terrain, tanks, dressing, wind) = generate_match_world(
+        round_seed(match_seed.0, 1),
+        &player_ids,
+        configuration.environment,
+    );
     let turn = initial_turn_state(&tanks);
     App::new()
         .add_plugins(DefaultPlugins)
@@ -639,17 +664,21 @@ fn main() {
         .insert_resource(ImpactFlash::default())
         .insert_resource(MovementFeedback::default())
         .insert_resource(MovementCompletionThisFrame::default())
+        .insert_resource(MovementFrame::default())
         .insert_resource(CameraAimReset::default())
         .insert_resource(MatchSetupGate::default())
-        .insert_resource(PendingMatchConfiguration(configuration))
+        .insert_resource(PendingMatchConfiguration(configuration.clone()))
         .insert_resource(GameSession::new(MatchConfiguration::default().players))
         .insert_resource(DamageAccounting::default())
         .insert_resource(AimRepeatState::default())
         .insert_resource(TurretDinkCooldown::default())
         .insert_resource(BattlefieldGravity(
-            Gravity::new(DEVELOPMENT_GRAVITY).expect("development gravity must be valid"),
+            Gravity::new(configuration.environment.gravity())
+                .expect("preset gravity must be valid"),
         ))
         .insert_resource(BattlefieldWind(wind))
+        .insert_resource(TurnwindState::default())
+        .insert_resource(SkyPresentation(SkyProfile::Clear))
         .insert_resource(Time::<Fixed>::from_hz(PROJECTILE_FIXED_HZ))
         .add_systems(
             Startup,
@@ -698,6 +727,8 @@ fn main() {
             )
                 .chain(),
         )
+        .add_systems(Update, update_turnwind)
+        .add_systems(Update, sync_sky_presentation.after(update_match_setup))
         .add_systems(
             Update,
             (
@@ -753,7 +784,10 @@ fn spawn_battlefield_scene(
 
     commands.spawn((
         BattlefieldVisual,
-        Mesh3d(meshes.add(create_battlefield_mesh(&terrain.0))),
+        Mesh3d(meshes.add(create_battlefield_mesh(
+            &terrain.0,
+            configuration.0.environment.palette(),
+        ))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::WHITE,
             perceptual_roughness: 0.88,
@@ -766,6 +800,7 @@ fn spawn_battlefield_scene(
         Mesh3d(meshes.add(create_horizon_mesh(&VisualHorizon::from_terrain(
             &terrain.0,
             BattlefieldSeed(derived_seed(match_seed.0, "terrain")),
+            configuration.0.environment.palette(),
         )))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::WHITE,
@@ -773,7 +808,12 @@ fn spawn_battlefield_scene(
             ..default()
         })),
     ));
-    spawn_clouds(&mut commands, &mut meshes, &mut materials);
+    spawn_clouds(
+        &mut commands,
+        &mut meshes,
+        &mut materials,
+        configuration.0.environment.sky(),
+    );
 
     commands.spawn((
         WaterVisual,
@@ -1040,7 +1080,7 @@ fn spawn_match_setup(mut commands: Commands) {
                 ));
                 setup_text(
                     panel,
-                    "2-8: COUNT | UP/DOWN: SLOT | TYPE: NAME | TAB: HUMAN/AI | D: AI LEVEL | CTRL+R: REROLL AI",
+                    "2-8: COUNT | UP/DOWN: SLOT | E: ENVIRONMENT | TAB: HUMAN/AI | D: AI LEVEL | CTRL+R: REROLL AI",
                     16.0,
                     UI_MUTED,
                 );
@@ -1463,6 +1503,9 @@ fn update_match_setup(
             .expect("setup controls use valid counts");
         gate.selected_slot = gate.selected_slot.min(count - 1);
     }
+    if keyboard.just_pressed(KeyCode::KeyE) {
+        configuration.0.cycle_environment();
+    }
     if keyboard.just_pressed(KeyCode::ArrowUp) {
         gate.selected_slot = gate
             .selected_slot
@@ -1534,8 +1577,10 @@ fn update_match_setup(
     };
     for mut text in &mut details {
         text.0 = format!(
-            "PLAYERS: {}\n{lines}\n\n{validation_message}",
-            configuration.0.players.len()
+            "PLAYERS: {}\nENVIRONMENT: {}\n{}\n\n{lines}\n\n{validation_message}",
+            configuration.0.players.len(),
+            configuration.0.environment.label(),
+            configuration.0.environment.summary()
         );
     }
     if keyboard.just_pressed(KeyCode::Enter) {
@@ -1558,11 +1603,15 @@ fn update_match_setup(
         };
         let selected_round_seed = round_seed(match_seed.0, next_round);
         let (generated, generated_tanks, generated_dressing, generated_wind) =
-            generate_match_world(selected_round_seed, &ids);
+            generate_match_world(selected_round_seed, &ids, configuration.0.environment);
         terrain.0 = generated;
         tanks.0 = generated_tanks;
         dressing.0 = generated_dressing;
         wind.0 = generated_wind;
+        commands.insert_resource(BattlefieldGravity(
+            Gravity::new(configuration.0.environment.gravity())
+                .expect("preset gravity must be valid"),
+        ));
         turn.0 = initial_turn_state(&tanks.0);
         // A new round must not inherit the old impact/result camera. PlayerView lets the normal
         // active-turret camera own the next turn immediately.
@@ -1621,6 +1670,7 @@ fn update_match_setup(
             Mesh3d(meshes.add(create_horizon_mesh(&VisualHorizon::from_terrain(
                 &terrain.0,
                 BattlefieldSeed(derived_seed(selected_round_seed, "terrain")),
+                configuration.0.environment.palette(),
             )))),
             MeshMaterial3d(dressing_assets.horizon_material.clone()),
         ));
@@ -2127,12 +2177,15 @@ fn select_weapon_slot(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn select_movement_action(
     keyboard: Res<ButtonInput<KeyCode>>,
     setup: Res<MatchSetupGate>,
     configuration: Res<PendingMatchConfiguration>,
     presentation: Res<ShotPresentation>,
+    tanks: Res<Tanks>,
     mut feedback: ResMut<MovementFeedback>,
+    mut movement_frame: ResMut<MovementFrame>,
     mut turn: ResMut<CurrentTurn>,
 ) {
     if setup.started
@@ -2142,6 +2195,11 @@ fn select_movement_action(
         && turn.0.begin_movement()
     {
         feedback.0 = None;
+        movement_frame.0 = Some(
+            tank_for_player(&tanks.0, turn.0.current_player)
+                .pose
+                .body_forward,
+        );
     }
 }
 
@@ -2152,7 +2210,7 @@ fn update_movement_input(
     configuration: Res<PendingMatchConfiguration>,
     presentation: Res<ShotPresentation>,
     terrain: Res<BattlefieldState>,
-    camera: Single<&BattlefieldCamera>,
+    mut movement_frame: ResMut<MovementFrame>,
     mut tanks: ResMut<Tanks>,
     mut feedback: ResMut<MovementFeedback>,
     mut completion: ResMut<MovementCompletionThisFrame>,
@@ -2169,15 +2227,19 @@ fn update_movement_input(
     if movement_completion_requested(&keyboard) {
         if turn.0.finish_movement(survivors(&tanks.0)) {
             feedback.0 = None;
+            movement_frame.0 = None;
             completion.0 = keyboard.just_pressed(KeyCode::Space);
         }
         return;
     }
-    let Some(direction) = movement_direction(&keyboard, camera.yaw) else {
-        return;
-    };
     let player = turn.0.current_player;
     let tank = tank_for_player(&tanks.0, player);
+    let Some(direction) = movement_direction(
+        &keyboard,
+        movement_frame.0.unwrap_or(tank.pose.body_forward),
+    ) else {
+        return;
+    };
     match tank.step_on_terrain(&terrain.0, direction) {
         Ok(moved) => {
             *tank_for_player_mut(&mut tanks.0, player) = moved;
@@ -2195,19 +2257,18 @@ fn movement_completion_requested(keyboard: &ButtonInput<KeyCode>) -> bool {
     keyboard.just_pressed(KeyCode::Enter) || keyboard.just_pressed(KeyCode::Space)
 }
 
-/// Maps screen-space arrows to the nearest existing cardinal world step. This retains deliberate
-/// one-unit movement while making directions follow the current tactical camera orientation.
+/// Movement uses the tank's hull as its reference: up is forward, rather than whichever way the
+/// player happened to orbit the tactical camera before entering movement mode.
 fn movement_direction(
     keyboard: &ButtonInput<KeyCode>,
-    camera_yaw: f32,
+    forward: HorizontalDirection,
 ) -> Option<MovementDirection> {
-    let camera_forward = (-camera_yaw.sin(), -camera_yaw.cos());
-    let camera_right = (camera_yaw.cos(), -camera_yaw.sin());
+    let right = (-forward.z, forward.x);
     let directions = [
-        (KeyCode::ArrowUp, camera_forward),
-        (KeyCode::ArrowLeft, (-camera_right.0, -camera_right.1)),
-        (KeyCode::ArrowDown, (-camera_forward.0, -camera_forward.1)),
-        (KeyCode::ArrowRight, camera_right),
+        (KeyCode::ArrowUp, (forward.x, forward.z)),
+        (KeyCode::ArrowLeft, (-right.0, -right.1)),
+        (KeyCode::ArrowDown, (-forward.x, -forward.z)),
+        (KeyCode::ArrowRight, right),
     ];
     let mut requested = directions
         .into_iter()
@@ -3164,6 +3225,7 @@ fn round_seed(root: BattlefieldSeed, round_number: u32) -> BattlefieldSeed {
 fn generate_match_world(
     seed: BattlefieldSeed,
     players: &[PlayerId],
+    environment: EnvironmentPreset,
 ) -> (BattlefieldTerrain, Vec<Tank>, Vec<BuildingPlacement>, Wind) {
     const MAX_GENERATION_ATTEMPTS: u64 = 32;
     let (seed, terrain, tanks) = (0..MAX_GENERATION_ATTEMPTS)
@@ -3172,8 +3234,10 @@ fn generate_match_world(
                 seed.0
                     .wrapping_add(attempt.wrapping_mul(0xd1b5_4a32_d192_ed03)),
             );
-            let terrain =
-                BattlefieldTerrain::generated(BattlefieldSeed(derived_seed(candidate, "terrain")));
+            let terrain = BattlefieldTerrain::generated(
+                BattlefieldSeed(derived_seed(candidate, "terrain")),
+                environment.terrain_profile(),
+            );
             initial_tanks_for_players_seeded(&terrain, players, derived_seed(candidate, "starts"))
                 .map(|tanks| (candidate, terrain, tanks))
         })
@@ -3184,7 +3248,7 @@ fn generate_match_world(
         .collect::<Vec<_>>();
     let dressing = generate_buildings(&terrain, &starts, derived_seed(seed, "dressing"));
     let wind = if WIND_ENABLED {
-        wind_from_seed(derived_seed(seed, "wind"))
+        wind_from_seed(derived_seed(seed, "wind"), environment.wind_range())
     } else {
         Wind::new(WorldVector::ZERO).expect("calm wind must be valid")
     };
@@ -3193,12 +3257,11 @@ fn generate_match_world(
 }
 
 /// Kept pure so a recorded seed recreates the same match condition in tests or diagnostics.
-fn wind_from_seed(mut seed: u64) -> Wind {
+fn wind_from_seed(mut seed: u64, range: (f32, f32)) -> Wind {
     let direction_fraction = next_random_fraction(&mut seed);
     let strength_fraction = next_random_fraction(&mut seed);
     let angle = direction_fraction * std::f32::consts::TAU;
-    let strength =
-        MINIMUM_WIND_STRENGTH + (MAXIMUM_WIND_STRENGTH - MINIMUM_WIND_STRENGTH) * strength_fraction;
+    let strength = range.0 + (range.1 - range.0) * strength_fraction;
     Wind::new(WorldVector {
         x: angle.cos() * strength,
         y: 0.0,
@@ -3210,6 +3273,31 @@ fn wind_from_seed(mut seed: u64) -> Wind {
 fn next_random_fraction(seed: &mut u64) -> f32 {
     *seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
     ((*seed >> 40) as f32) / ((1_u32 << 24) as f32)
+}
+
+/// Turnwind is sampled only when control reaches a new choosing turn; projectile flight and
+/// resolution continue using the retained resource value.
+fn update_turnwind(
+    configuration: Res<PendingMatchConfiguration>,
+    match_seed: Res<MatchSeed>,
+    turn: Res<CurrentTurn>,
+    mut state: ResMut<TurnwindState>,
+    mut wind: ResMut<BattlefieldWind>,
+) {
+    if configuration.0.environment.wind_policy() != WindPolicy::RerollEachTurn
+        || turn.0.phase != TurnPhase::Choosing
+    {
+        return;
+    }
+    if state.last_player == Some(turn.0.current_player) {
+        return;
+    }
+    state.last_player = Some(turn.0.current_player);
+    state.handoff_ordinal = state.handoff_ordinal.wrapping_add(1);
+    wind.0 = wind_from_seed(
+        derived_seed(match_seed.0, &format!("turnwind-{}", state.handoff_ordinal)),
+        configuration.0.environment.wind_range(),
+    );
 }
 
 fn player_name(player: PlayerId) -> String {
@@ -3683,6 +3771,7 @@ fn rolling_enemy_contact(
 
 fn sync_battlefield_mesh(
     terrain: Res<BattlefieldState>,
+    configuration: Res<PendingMatchConfiguration>,
     mut meshes: ResMut<Assets<Mesh>>,
     visuals: Query<&Mesh3d, With<BattlefieldVisual>>,
 ) {
@@ -3691,7 +3780,7 @@ fn sync_battlefield_mesh(
     }
     for mesh_handle in &visuals {
         if let Some(mesh) = meshes.get_mut(&mesh_handle.0) {
-            *mesh = create_battlefield_mesh(&terrain.0);
+            *mesh = create_battlefield_mesh(&terrain.0, configuration.0.environment.palette());
         }
     }
 }
@@ -4176,6 +4265,7 @@ fn update_battlefield_camera(
         Res<ProjectileFlight>,
         Res<ShotPresentation>,
     ),
+    movement_frame: Res<MovementFrame>,
     mut aim_reset: ResMut<CameraAimReset>,
     weapon_slots: Query<&Interaction, With<WeaponSlot>>,
     camera: Single<(&mut Transform, &mut BattlefieldCamera)>,
@@ -4203,9 +4293,18 @@ fn update_battlefield_camera(
             CameraPresentationIntent::HumanShotFollow(_)
                 | CameraPresentationIntent::AiTacticalShot { .. }
         )
+        || matches!(intent, CameraPresentationIntent::MovementPlayer(_))
     {
         controller.presentation_intent = Some(intent);
-        controller.desired_pose = camera_pose_for_intent(intent, tanks.0.clone(), turn.0.clone());
+        controller.desired_pose = match intent {
+            CameraPresentationIntent::MovementPlayer(player) => movement_camera_pose(
+                tank_for_player(&tanks.0, player),
+                movement_frame
+                    .0
+                    .unwrap_or(tank_for_player(&tanks.0, player).pose.body_forward),
+            ),
+            _ => camera_pose_for_intent(intent, tanks.0.clone(), turn.0.clone()),
+        };
         controller.tracked_aim_yaw = active_aim_yaw(intent, turn.0.clone());
     } else if let Some(aim_yaw) = active_aim_yaw(intent, turn.0.clone()) {
         if let Some(previous_aim_yaw) = controller.tracked_aim_yaw {
@@ -4244,6 +4343,15 @@ fn update_battlefield_camera(
     *transform = camera_transform(&controller);
 }
 
+fn movement_camera_pose(tank: Tank, forward: HorizontalDirection) -> CameraPose {
+    CameraPose {
+        target: clamp_camera_target(to_bevy_position(tank.pose.position) + Vec3::Y * 1.4),
+        yaw: (-forward.x).atan2(-forward.z),
+        pitch: -0.26,
+        distance: 10.0,
+    }
+}
+
 fn clamp_camera_pitch(pitch: f32) -> f32 {
     pitch.clamp(CAMERA_MIN_PITCH, CAMERA_MAX_PITCH)
 }
@@ -4256,7 +4364,11 @@ fn camera_presentation_intent(
     let turn = turn.borrow();
     match presentation.phase {
         ShotPresentationPhase::PlayerView => {
-            CameraPresentationIntent::ActivePlayer(turn.current_player)
+            if turn.is_moving() {
+                CameraPresentationIntent::MovementPlayer(turn.current_player)
+            } else {
+                CameraPresentationIntent::ActivePlayer(turn.current_player)
+            }
         }
         ShotPresentationPhase::Flight {
             mode: ShotPresentationMode::HumanFollow,
@@ -4306,6 +4418,15 @@ fn camera_pose_for_intent(
                     .expect("an active-player camera intent must have aiming yaw"),
                 pitch: ACTIVE_PLAYER_CAMERA_PITCH,
                 distance: ACTIVE_PLAYER_CAMERA_DISTANCE,
+            }
+        }
+        CameraPresentationIntent::MovementPlayer(player) => {
+            let tank = tank_for_player(tanks, player);
+            CameraPose {
+                target: clamp_camera_target(to_bevy_position(tank.pose.position) + Vec3::Y * 1.4),
+                yaw: (-tank.pose.body_forward.x).atan2(-tank.pose.body_forward.z),
+                pitch: -0.26,
+                distance: 10.0,
             }
         }
         CameraPresentationIntent::HumanShotFollow(projectile) => human_shot_camera_pose(projectile),
@@ -4410,13 +4531,13 @@ fn clamp_camera_target(target: Vec3) -> Vec3 {
     )
 }
 
-fn create_battlefield_mesh(terrain: &BattlefieldTerrain) -> Mesh {
+fn create_battlefield_mesh(terrain: &BattlefieldTerrain, palette: PaletteProfile) -> Mesh {
     Mesh::new(
         PrimitiveTopology::TriangleList,
         RenderAssetUsages::default(),
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, terrain.mesh_positions())
-    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, terrain.mesh_colours())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, terrain.mesh_colours(palette))
     .with_inserted_indices(Indices::U32(terrain_mesh_indices()))
     .with_computed_smooth_normals()
 }
@@ -4436,6 +4557,42 @@ fn sky_colour() -> Color {
     Color::srgb(0.26, 0.55, 0.86)
 }
 
+fn sky_colour_for(profile: SkyProfile) -> Color {
+    match profile {
+        SkyProfile::Clear => sky_colour(),
+        SkyProfile::MoonStars => Color::srgb(0.008, 0.012, 0.04),
+        SkyProfile::Storm => Color::srgb(0.12, 0.18, 0.27),
+        SkyProfile::CrusherHaze => Color::srgb(0.62, 0.25, 0.08),
+    }
+}
+
+/// Sky objects are presentation-only. Rebuilding them at the setup boundary keeps Moon's calm,
+/// cloudless night independent from terrain and simulation state.
+fn sync_sky_presentation(
+    gate: Res<MatchSetupGate>,
+    configuration: Res<PendingMatchConfiguration>,
+    mut current: ResMut<SkyPresentation>,
+    mut clear_colour: ResMut<ClearColor>,
+    assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
+    clouds: Query<Entity, With<CloudVisual>>,
+    mut commands: Commands,
+) {
+    if !gate.started {
+        return;
+    }
+    let selected = configuration.0.environment.sky();
+    if current.0 == selected {
+        return;
+    }
+    current.0 = selected;
+    clear_colour.0 = sky_colour_for(selected);
+    for entity in &clouds {
+        commands.entity(entity).despawn();
+    }
+    let (mut meshes, mut materials) = assets;
+    spawn_clouds(&mut commands, &mut meshes, &mut materials, selected);
+}
+
 fn cloud_positions() -> [(Vec3, Vec3); 6] {
     [
         (Vec3::new(-76.0, 24.0, -76.0), Vec3::new(11.0, 2.4, 5.0)),
@@ -4451,7 +4608,32 @@ fn spawn_clouds(
     commands: &mut Commands,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    sky: SkyProfile,
 ) {
+    if sky == SkyProfile::MoonStars {
+        let mesh = meshes.add(Sphere::new(0.18));
+        let material = materials.add(StandardMaterial {
+            base_color: Color::WHITE,
+            emissive: Color::WHITE.into(),
+            unlit: true,
+            ..default()
+        });
+        for index in 0..72 {
+            let angle = index as f32 * 2.399_963;
+            let radius = 90.0 + (index % 9) as f32 * 8.0;
+            commands.spawn((
+                CloudVisual,
+                Mesh3d(mesh.clone()),
+                MeshMaterial3d(material.clone()),
+                Transform::from_xyz(
+                    angle.cos() * radius,
+                    35.0 + (index % 7) as f32 * 5.0,
+                    angle.sin() * radius,
+                ),
+            ));
+        }
+        return;
+    }
     let mesh = meshes.add(Sphere::new(1.0));
     let material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.94, 0.97, 1.0),
@@ -4461,6 +4643,7 @@ fn spawn_clouds(
     });
     for (position, scale) in cloud_positions() {
         commands.spawn((
+            CloudVisual,
             Mesh3d(mesh.clone()),
             MeshMaterial3d(material.clone()),
             Transform::from_translation(position).with_scale(scale),
@@ -4493,6 +4676,7 @@ fn spawn_buildings(
 mod tests {
     use super::*;
     use crate::battlefield::Crater;
+    use crate::environment::TerrainProfile;
     use crate::tank::{initial_tanks, initial_tanks_for_players};
 
     fn basic_fired_shot(projectile: Projectile) -> FiredShot {
@@ -4599,8 +4783,9 @@ mod tests {
         assert!(!cloud_positions().is_empty());
         assert_eq!(clamp_camera_pitch(-10.0), CAMERA_MIN_PITCH);
         assert_eq!(clamp_camera_pitch(10.0), CAMERA_MAX_PITCH);
-        let terrain = BattlefieldTerrain::generated(BattlefieldSeed(17));
-        let horizon = VisualHorizon::from_terrain(&terrain, BattlefieldSeed(17));
+        let terrain = BattlefieldTerrain::generated(BattlefieldSeed(17), TerrainProfile::Standard);
+        let horizon =
+            VisualHorizon::from_terrain(&terrain, BattlefieldSeed(17), PaletteProfile::Earth);
         assert!(!horizon.positions().is_empty());
         assert!(create_horizon_mesh(&horizon).count_vertices() > 0);
     }
@@ -4645,13 +4830,13 @@ mod tests {
     fn cosmetic_models_do_not_perturb_authoritative_world_generation() {
         let seed = BattlefieldSeed(91);
         let players = (1..=8).map(PlayerId).collect::<Vec<_>>();
-        let before = generate_match_world(seed, &players);
+        let before = generate_match_world(seed, &players, EnvironmentPreset::Earth);
         let _models = players
             .iter()
             .copied()
             .map(TankVisualModel::for_player)
             .collect::<Vec<_>>();
-        let after = generate_match_world(seed, &players);
+        let after = generate_match_world(seed, &players, EnvironmentPreset::Earth);
         assert_eq!(before, after);
     }
 
@@ -4659,11 +4844,16 @@ mod tests {
     fn round_seeds_reproduce_one_round_and_vary_across_consecutive_rounds() {
         let root = BattlefieldSeed(91);
         let players = (1..=8).map(PlayerId).collect::<Vec<_>>();
-        let first = generate_match_world(round_seed(root, 1), &players);
-        assert_eq!(first, generate_match_world(round_seed(root, 1), &players));
+        let first = generate_match_world(round_seed(root, 1), &players, EnvironmentPreset::Earth);
+        assert_eq!(
+            first,
+            generate_match_world(round_seed(root, 1), &players, EnvironmentPreset::Earth)
+        );
 
         let rounds = (1..=5)
-            .map(|round| generate_match_world(round_seed(root, round), &players))
+            .map(|round| {
+                generate_match_world(round_seed(root, round), &players, EnvironmentPreset::Earth)
+            })
             .collect::<Vec<_>>();
         for pair in rounds.windows(2) {
             assert_ne!(pair[0].0, pair[1].0);
@@ -4675,8 +4865,11 @@ mod tests {
         for root in 0..100 {
             for count in 2..=8 {
                 let players = (1..=count).map(PlayerId).collect::<Vec<_>>();
-                let (terrain, tanks, _, _) =
-                    generate_match_world(round_seed(BattlefieldSeed(root), 1), &players);
+                let (terrain, tanks, _, _) = generate_match_world(
+                    round_seed(BattlefieldSeed(root), 1),
+                    &players,
+                    EnvironmentPreset::Earth,
+                );
                 assert_eq!(tanks.len(), count as usize);
                 for (index, tank) in tanks.iter().enumerate() {
                     assert_eq!(tank.health, MAX_HEALTH);
@@ -4811,7 +5004,7 @@ mod tests {
     }
 
     #[test]
-    fn movement_mode_maps_arrows_to_camera_relative_cardinal_steps() {
+    fn movement_mode_maps_arrows_to_hull_relative_cardinal_steps() {
         let cases = [
             (KeyCode::ArrowUp, MovementDirection::NegativeZ),
             (KeyCode::ArrowLeft, MovementDirection::NegativeX),
@@ -4821,19 +5014,25 @@ mod tests {
         for (key, expected) in cases {
             let mut keyboard = ButtonInput::default();
             keyboard.press(key);
-            assert_eq!(movement_direction(&keyboard, 0.0), Some(expected));
+            assert_eq!(
+                movement_direction(&keyboard, HorizontalDirection::new(0.0, -1.0)),
+                Some(expected)
+            );
         }
 
         let mut rotated = ButtonInput::default();
         rotated.press(KeyCode::ArrowUp);
         assert_eq!(
-            movement_direction(&rotated, std::f32::consts::FRAC_PI_2),
-            Some(MovementDirection::NegativeX)
+            movement_direction(&rotated, HorizontalDirection::new(1.0, 0.0)),
+            Some(MovementDirection::PositiveX)
         );
 
         let mut retired = ButtonInput::default();
         retired.press(KeyCode::KeyI);
-        assert_eq!(movement_direction(&retired, 0.0), None);
+        assert_eq!(
+            movement_direction(&retired, HorizontalDirection::new(0.0, -1.0)),
+            None
+        );
     }
 
     #[test]
@@ -5188,9 +5387,9 @@ mod tests {
 
     #[test]
     fn match_wind_is_reproducible_from_a_seed_and_stays_gentle() {
-        let first = wind_from_seed(42);
-        let second = wind_from_seed(42);
-        let different = wind_from_seed(43);
+        let first = wind_from_seed(42, (MINIMUM_WIND_STRENGTH, MAXIMUM_WIND_STRENGTH));
+        let second = wind_from_seed(42, (MINIMUM_WIND_STRENGTH, MAXIMUM_WIND_STRENGTH));
+        let different = wind_from_seed(43, (MINIMUM_WIND_STRENGTH, MAXIMUM_WIND_STRENGTH));
 
         assert_eq!(first, second);
         assert_ne!(first, different);

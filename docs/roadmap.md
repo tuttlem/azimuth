@@ -722,7 +722,7 @@ Battlefields should differ through physical rules as well as terrain.
 * [x] Select number of players.
 * [x] Select human/AI players at match configuration time; AI opponents are available.
 * [ ] Select battlefield.
-* [ ] Select environment preset.
+* [x] Select environment preset.
 * [ ] Select random seed where appropriate.
 * [ ] Configure starting weapons.
 * [ ] Configure health.
@@ -1163,11 +1163,11 @@ These are conceptual milestones rather than fixed specification sequences.
 
 ## Milestone F — Environment
 
-* [ ] Gravity varies by battlefield.
+* [x] Gravity varies by battlefield.
 * [x] Wind affects projectiles.
 * [ ] Atmospheric drag exists.
-* [ ] Environment parameters are clearly shown to players.
-* [ ] At least three meaningfully different battlefield environments exist.
+* [x] Environment parameters are clearly shown to players.
+* [x] At least three meaningfully different battlefield environments exist.
 
 ## Milestone G — Arsenal
 
