@@ -324,6 +324,21 @@ impl BattlefieldTerrain {
         positions
     }
 
+    /// Stable surface UVs deliberately share the authoritative terrain grid, so visual detail
+    /// stays welded to craters and generated hills without participating in gameplay.
+    pub fn mesh_uvs(&self) -> Vec<[f32; 2]> {
+        let mut uvs = Vec::with_capacity(self.heights.len());
+        for z_index in 0..VERTICES_PER_SIDE {
+            for x_index in 0..VERTICES_PER_SIDE {
+                uvs.push([
+                    x_index as f32 / TERRAIN_CELLS_PER_SIDE as f32,
+                    z_index as f32 / TERRAIN_CELLS_PER_SIDE as f32,
+                ]);
+            }
+        }
+        uvs
+    }
+
     /// Presentation is derived from current terrain height so a crater cannot reveal stale or
     /// uninitialised colour. Water itself is a separate flat presentation plane.
     pub fn mesh_colours(&self, palette: PaletteProfile) -> Vec<[f32; 4]> {

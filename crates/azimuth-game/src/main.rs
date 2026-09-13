@@ -398,6 +398,16 @@ struct WorldDressingAssets {
     horizon_material: Handle<StandardMaterial>,
 }
 
+#[derive(Resource)]
+struct TerrainTextureAssets {
+    earth: Handle<Image>,
+    moon: Handle<Image>,
+    crusher: Handle<Image>,
+}
+
+#[derive(Resource)]
+struct TerrainPresentation(PaletteProfile);
+
 #[derive(Component)]
 struct ProjectileVisual;
 
@@ -729,6 +739,7 @@ fn main() {
         )
         .add_systems(Update, update_turnwind)
         .add_systems(Update, sync_sky_presentation.after(update_match_setup))
+        .add_systems(Update, sync_terrain_textures.after(update_match_setup))
         .add_systems(
             Update,
             (
@@ -780,6 +791,13 @@ fn spawn_battlefield_scene(
         turret_dink: asset_server.load("audio/turret-dink.ogg"),
         purchase: asset_server.load("audio/ui-purchase.ogg"),
     });
+    let terrain_textures = TerrainTextureAssets {
+        earth: asset_server.load("textures/terrain-ground.png"),
+        moon: asset_server.load("textures/moon-regolith.png"),
+        crusher: asset_server.load("textures/crusher-sand.png"),
+    };
+    let water_texture = asset_server.load("textures/water-ripples.png");
+    let tank_texture = asset_server.load("textures/tank-metal.png");
     spawn_wind_indicator_overlay(&mut commands, &mut meshes, &mut materials);
 
     commands.spawn((
@@ -790,6 +808,10 @@ fn spawn_battlefield_scene(
         ))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::WHITE,
+            base_color_texture: terrain_texture_for(
+                configuration.0.environment.palette(),
+                &terrain_textures,
+            ),
             perceptual_roughness: 0.88,
             ..default()
         })),
@@ -804,6 +826,10 @@ fn spawn_battlefield_scene(
         )))),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::WHITE,
+            base_color_texture: terrain_texture_for(
+                configuration.0.environment.palette(),
+                &terrain_textures,
+            ),
             perceptual_roughness: 0.88,
             ..default()
         })),
@@ -826,13 +852,19 @@ fn spawn_battlefield_scene(
         ),
         MeshMaterial3d(materials.add(StandardMaterial {
             base_color: Color::srgb(0.035, 0.20, 0.62),
+            base_color_texture: Some(water_texture),
             perceptual_roughness: 0.24,
             reflectance: 0.65,
             ..default()
         })),
         Transform::from_xyz(0.0, WATER_TABLE, 0.0),
     ));
-    let building_material = materials.add(Color::srgb(0.36, 0.38, 0.40));
+    let building_material = materials.add(StandardMaterial {
+        base_color: Color::srgb(0.36, 0.38, 0.40),
+        base_color_texture: Some(tank_texture.clone()),
+        perceptual_roughness: 0.78,
+        ..default()
+    });
     spawn_buildings(
         &mut commands,
         &mut meshes,
@@ -847,6 +879,8 @@ fn spawn_battlefield_scene(
             ..default()
         }),
     });
+    commands.insert_resource(TerrainPresentation(configuration.0.environment.palette()));
+    commands.insert_resource(terrain_textures);
 
     commands.spawn((
         DirectionalLight {
@@ -864,15 +898,17 @@ fn spawn_battlefield_scene(
         track: meshes.add(Cuboid::new(0.34, 0.42, 2.25)),
         firing_origin_marker: meshes.add(Sphere::new(0.12)),
     };
-    let player_materials = tank_materials(&mut materials);
+    let player_materials = tank_materials(&mut materials, tank_texture.clone());
     let track_material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.07, 0.08, 0.08),
+        base_color_texture: Some(tank_texture.clone()),
         metallic: 0.35,
         perceptual_roughness: 0.72,
         ..default()
     });
     let barrel_material = materials.add(StandardMaterial {
         base_color: Color::srgb(0.12, 0.14, 0.15),
+        base_color_texture: Some(tank_texture),
         metallic: 0.65,
         perceptual_roughness: 0.42,
         ..default()
@@ -903,17 +939,28 @@ fn spawn_battlefield_scene(
     spawn_tactical_hud(&mut commands, &configuration.0.players, &icons);
 
     commands.insert_resource(ProjectileVisualAssets {
-        mesh: meshes.add(Sphere::new(0.28)),
+        // A small, single-piece rocket stays inexpensive for cluster and MIRV salvos while its
+        // pointed nose and rear fins keep it from reading as a capsule at tactical distance.
+        mesh: meshes.add(rocket_mesh()),
         // Projectiles remain deliberately simple, but hot saturated colours make them read as
         // ordnance rather than friendly UI marbles at normal tactical-camera distance.
-        basic_material: materials.add(Color::srgb(0.95, 0.32, 0.08)),
-        high_explosive_material: materials.add(Color::srgb(1.0, 0.08, 0.02)),
-        heavy_material: materials.add(Color::srgb(0.20, 0.22, 0.24)),
-        mirv_carrier_material: materials.add(Color::srgb(0.65, 0.08, 0.08)),
-        mirv_child_material: materials.add(Color::srgb(0.18, 0.02, 0.02)),
-        cluster_material: materials.add(Color::srgb(1.0, 0.42, 0.02)),
-        roller_material: materials.add(Color::srgb(0.16, 0.30, 0.12)),
-        bunker_material: materials.add(Color::srgb(0.08, 0.09, 0.11)),
+        basic_material: projectile_material_asset(&mut materials, Color::srgb(0.95, 0.32, 0.08)),
+        high_explosive_material: projectile_material_asset(
+            &mut materials,
+            Color::srgb(1.0, 0.08, 0.02),
+        ),
+        heavy_material: projectile_material_asset(&mut materials, Color::srgb(0.20, 0.22, 0.24)),
+        mirv_carrier_material: projectile_material_asset(
+            &mut materials,
+            Color::srgb(0.65, 0.08, 0.08),
+        ),
+        mirv_child_material: projectile_material_asset(
+            &mut materials,
+            Color::srgb(0.18, 0.02, 0.02),
+        ),
+        cluster_material: projectile_material_asset(&mut materials, Color::srgb(1.0, 0.42, 0.02)),
+        roller_material: projectile_material_asset(&mut materials, Color::srgb(0.16, 0.30, 0.12)),
+        bunker_material: projectile_material_asset(&mut materials, Color::srgb(0.08, 0.09, 0.11)),
     });
     commands.insert_resource(ImpactMarkerAssets {
         mesh: meshes.add(Sphere::new(0.18)),
@@ -1823,7 +1870,7 @@ fn fire_current_player(
         ProjectileVisual,
         Mesh3d(assets.mesh.clone()),
         MeshMaterial3d(projectile_material(assets, definition.id)),
-        Transform::from_translation(to_bevy_position(shot.projectile.position)),
+        projectile_transform(shot.projectile),
     ));
     // Successful shared launch is the sole physical fire boundary for Human and AI turns.
     commands.spawn((
@@ -1870,6 +1917,164 @@ fn projectile_material(
         #[cfg(test)]
         WeaponId::TestConventional => assets.basic_material.clone(),
     }
+}
+
+fn projectile_material_asset(
+    materials: &mut Assets<StandardMaterial>,
+    colour: Color,
+) -> Handle<StandardMaterial> {
+    materials.add(StandardMaterial {
+        base_color: colour,
+        metallic: 0.5,
+        perceptual_roughness: 0.38,
+        ..default()
+    })
+}
+
+fn projectile_transform(projectile: Projectile) -> Transform {
+    projectile_visual_transform(projectile.position, projectile.velocity)
+}
+
+/// Builds a light, self-contained rocket aligned to +Y. Keeping its fins in the same mesh means
+/// split salvos need no child entities and retain the existing projectile lifecycle.
+fn rocket_mesh() -> Mesh {
+    fn triangle(
+        positions: &mut Vec<[f32; 3]>,
+        normals: &mut Vec<[f32; 3]>,
+        indices: &mut Vec<u32>,
+        a: Vec3,
+        b: Vec3,
+        c: Vec3,
+    ) {
+        let normal = (b - a).cross(c - a).normalize_or_zero().to_array();
+        let index = positions.len() as u32;
+        positions.extend([a.to_array(), b.to_array(), c.to_array()]);
+        normals.extend([normal; 3]);
+        indices.extend([index, index + 1, index + 2]);
+    }
+
+    fn quad(
+        positions: &mut Vec<[f32; 3]>,
+        normals: &mut Vec<[f32; 3]>,
+        indices: &mut Vec<u32>,
+        a: Vec3,
+        b: Vec3,
+        c: Vec3,
+        d: Vec3,
+    ) {
+        triangle(positions, normals, indices, a, b, c);
+        triangle(positions, normals, indices, a, c, d);
+    }
+
+    let mut positions = Vec::new();
+    let mut normals = Vec::new();
+    let mut indices = Vec::new();
+    const SIDES: usize = 10;
+    const RADIUS: f32 = 0.14;
+    const REAR_Y: f32 = -0.42;
+    const NOSE_BASE_Y: f32 = 0.20;
+    let nose = Vec3::new(0.0, 0.56, 0.0);
+
+    for side in 0..SIDES {
+        let angle = side as f32 * std::f32::consts::TAU / SIDES as f32;
+        let next_angle = (side + 1) as f32 * std::f32::consts::TAU / SIDES as f32;
+        let radial = Vec3::new(angle.cos() * RADIUS, 0.0, angle.sin() * RADIUS);
+        let next_radial = Vec3::new(next_angle.cos() * RADIUS, 0.0, next_angle.sin() * RADIUS);
+        let rear = radial.with_y(REAR_Y);
+        let front = radial.with_y(NOSE_BASE_Y);
+        let next_front = next_radial.with_y(NOSE_BASE_Y);
+        let next_rear = next_radial.with_y(REAR_Y);
+        quad(
+            &mut positions,
+            &mut normals,
+            &mut indices,
+            rear,
+            front,
+            next_front,
+            next_rear,
+        );
+        triangle(
+            &mut positions,
+            &mut normals,
+            &mut indices,
+            front,
+            nose,
+            next_front,
+        );
+    }
+
+    // Four shallow triangular prisms form durable, visible fins without overpowering the body.
+    for direction in [Vec3::X, Vec3::Z, -Vec3::X, -Vec3::Z] {
+        let tangent = Vec3::new(-direction.z, 0.0, direction.x) * 0.025;
+        let root_top = direction * 0.11 + Vec3::Y * -0.12;
+        let root_bottom = direction * 0.11 + Vec3::Y * REAR_Y;
+        let tip = direction * 0.39 + Vec3::Y * -0.46;
+        let front = [root_top + tangent, root_bottom + tangent, tip + tangent];
+        let back = [root_top - tangent, root_bottom - tangent, tip - tangent];
+        triangle(
+            &mut positions,
+            &mut normals,
+            &mut indices,
+            front[0],
+            front[1],
+            front[2],
+        );
+        triangle(
+            &mut positions,
+            &mut normals,
+            &mut indices,
+            back[2],
+            back[1],
+            back[0],
+        );
+        quad(
+            &mut positions,
+            &mut normals,
+            &mut indices,
+            front[0],
+            back[0],
+            back[1],
+            front[1],
+        );
+        quad(
+            &mut positions,
+            &mut normals,
+            &mut indices,
+            front[1],
+            back[1],
+            back[2],
+            front[2],
+        );
+        quad(
+            &mut positions,
+            &mut normals,
+            &mut indices,
+            front[2],
+            back[2],
+            back[0],
+            front[0],
+        );
+    }
+
+    let vertex_count = positions.len();
+    Mesh::new(
+        PrimitiveTopology::TriangleList,
+        RenderAssetUsages::default(),
+    )
+    .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, vec![[0.0, 0.0]; vertex_count])
+    .with_inserted_indices(Indices::U32(indices))
+}
+
+fn projectile_visual_transform(position: WorldPosition, velocity: WorldVector) -> Transform {
+    let velocity = Vec3::new(velocity.x, velocity.y, velocity.z);
+    let rotation = if velocity.length_squared() > f32::EPSILON {
+        Quat::from_rotation_arc(Vec3::Y, velocity.normalize())
+    } else {
+        Quat::IDENTITY
+    };
+    Transform::from_translation(to_bevy_position(position)).with_rotation(rotation)
 }
 
 fn current_player_is_human(configuration: &MatchConfiguration, turn: &TurnState) -> bool {
@@ -3191,9 +3396,20 @@ fn player_color(player: PlayerId) -> Color {
     COLOURS[(player.0.saturating_sub(1) as usize) % COLOURS.len()]
 }
 
-fn tank_materials(materials: &mut Assets<StandardMaterial>) -> Vec<Handle<StandardMaterial>> {
+fn tank_materials(
+    materials: &mut Assets<StandardMaterial>,
+    texture: Handle<Image>,
+) -> Vec<Handle<StandardMaterial>> {
     (1..=8)
-        .map(|id| materials.add(player_color(PlayerId(id))))
+        .map(|id| {
+            materials.add(StandardMaterial {
+                base_color: player_color(PlayerId(id)),
+                base_color_texture: Some(texture.clone()),
+                metallic: 0.18,
+                perceptual_roughness: 0.58,
+                ..default()
+            })
+        })
         .collect()
 }
 
@@ -3803,10 +4019,10 @@ fn sync_projectile_visual(
             shot.children
                 .iter()
                 .filter_map(|child| *child)
-                .map(|child| child.position)
+                .map(|child| (child.position, child.velocity))
                 .collect::<Vec<_>>()
         } else {
-            vec![shot.projectile.position]
+            vec![(shot.projectile.position, shot.projectile.velocity)]
         };
         let mut existing = visuals.iter_mut();
         let child_material = match shot.weapon {
@@ -3814,9 +4030,9 @@ fn sync_projectile_visual(
             WeaponId::ClusterBomb => assets.cluster_material.clone(),
             _ => assets.basic_material.clone(),
         };
-        for position in &positions {
+        for (position, velocity) in &positions {
             if let Some((_, mut transform, mut material)) = existing.next() {
-                transform.translation = to_bevy_position(*position);
+                *transform = projectile_visual_transform(*position, *velocity);
                 if shot.split {
                     material.0 = child_material.clone();
                 }
@@ -3826,7 +4042,7 @@ fn sync_projectile_visual(
                     ProjectileVisual,
                     Mesh3d(assets.mesh.clone()),
                     MeshMaterial3d(child_material.clone()),
-                    Transform::from_translation(to_bevy_position(*position)),
+                    projectile_visual_transform(*position, *velocity),
                 ));
             }
         }
@@ -4538,6 +4754,7 @@ fn create_battlefield_mesh(terrain: &BattlefieldTerrain, palette: PaletteProfile
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, terrain.mesh_positions())
     .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, terrain.mesh_colours(palette))
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, terrain.mesh_uvs())
     .with_inserted_indices(Indices::U32(terrain_mesh_indices()))
     .with_computed_smooth_normals()
 }
@@ -4563,6 +4780,42 @@ fn sky_colour_for(profile: SkyProfile) -> Color {
         SkyProfile::MoonStars => Color::srgb(0.008, 0.012, 0.04),
         SkyProfile::Storm => Color::srgb(0.12, 0.18, 0.27),
         SkyProfile::CrusherHaze => Color::srgb(0.62, 0.25, 0.08),
+    }
+}
+
+fn terrain_texture_for(
+    palette: PaletteProfile,
+    textures: &TerrainTextureAssets,
+) -> Option<Handle<Image>> {
+    match palette {
+        PaletteProfile::Earth => Some(textures.earth.clone()),
+        PaletteProfile::Moon => Some(textures.moon.clone()),
+        PaletteProfile::Crusher => Some(textures.crusher.clone()),
+        PaletteProfile::Storm => Some(textures.earth.clone()),
+    }
+}
+
+/// Palette-specific albedos preserve the visual promise of each environment without letting a
+/// green Earth texture bleach Moon or Crusher into the same world.
+fn sync_terrain_textures(
+    gate: Res<MatchSetupGate>,
+    configuration: Res<PendingMatchConfiguration>,
+    mut current: ResMut<TerrainPresentation>,
+    textures: Res<TerrainTextureAssets>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    battlefield: Query<&MeshMaterial3d<StandardMaterial>, With<BattlefieldVisual>>,
+    horizon: Query<&MeshMaterial3d<StandardMaterial>, With<HorizonVisual>>,
+) {
+    let palette = configuration.0.environment.palette();
+    if !gate.started || current.0 == palette {
+        return;
+    }
+    current.0 = palette;
+    let texture = terrain_texture_for(palette, &textures);
+    for handle in battlefield.iter().chain(horizon.iter()) {
+        if let Some(material) = materials.get_mut(&handle.0) {
+            material.base_color_texture = texture.clone();
+        }
     }
 }
 
