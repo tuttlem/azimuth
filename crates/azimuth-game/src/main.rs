@@ -24,8 +24,10 @@ use bevy::{
     asset::RenderAssetUsages,
     audio::{AudioPlayer, AudioSource, PlaybackSettings, SpatialListener, Volume},
     camera::{Viewport, visibility::RenderLayers},
+    image::{ImageAddressMode, ImageLoaderSettings, ImageSampler, ImageSamplerDescriptor},
     input::mouse::{AccumulatedMouseMotion, MouseWheel},
     mesh::Indices,
+    pbr::{DistanceFog, FogFalloff},
     prelude::*,
     render::render_resource::PrimitiveTopology,
 };
@@ -395,7 +397,6 @@ struct ImpactEffectAssets {
 #[derive(Resource)]
 struct WorldDressingAssets {
     material: Handle<StandardMaterial>,
-    horizon_material: Handle<StandardMaterial>,
 }
 
 #[derive(Resource)]
@@ -782,6 +783,7 @@ fn spawn_battlefield_scene(
             far: 300.0,
             ..default()
         }),
+        distance_fog_for(configuration.0.environment.sky()),
         camera,
         transform,
     ));
@@ -792,9 +794,9 @@ fn spawn_battlefield_scene(
         purchase: asset_server.load("audio/ui-purchase.ogg"),
     });
     let terrain_textures = TerrainTextureAssets {
-        earth: asset_server.load("textures/terrain-ground.png"),
-        moon: asset_server.load("textures/moon-regolith.png"),
-        crusher: asset_server.load("textures/crusher-sand.png"),
+        earth: load_repeating_terrain_texture(&asset_server, "textures/terrain-ground.png"),
+        moon: load_repeating_terrain_texture(&asset_server, "textures/moon-regolith.png"),
+        crusher: load_repeating_terrain_texture(&asset_server, "textures/crusher-sand.png"),
     };
     let water_texture = asset_server.load("textures/water-ripples.png");
     let tank_texture = asset_server.load("textures/tank-metal.png");
@@ -873,11 +875,6 @@ fn spawn_battlefield_scene(
     );
     commands.insert_resource(WorldDressingAssets {
         material: building_material,
-        horizon_material: materials.add(StandardMaterial {
-            base_color: Color::WHITE,
-            perceptual_roughness: 0.88,
-            ..default()
-        }),
     });
     commands.insert_resource(TerrainPresentation(configuration.0.environment.palette()));
     commands.insert_resource(terrain_textures);
@@ -1495,7 +1492,12 @@ fn update_match_setup(
     mut turn: ResMut<CurrentTurn>,
     mut weapons: ResMut<WeaponState>,
     world: MatchSetupWorldResources,
-    dressing_render: (ResMut<Assets<Mesh>>, Res<WorldDressingAssets>),
+    dressing_render: (
+        ResMut<Assets<Mesh>>,
+        Res<WorldDressingAssets>,
+        Res<TerrainTextureAssets>,
+        ResMut<Assets<StandardMaterial>>,
+    ),
     tank_meshes: Res<TankMeshes>,
     presentation_assets: (Res<TankPresentationAssets>, Res<WeaponIconAssets>),
     overlays: Query<Entity, With<MatchSetupOverlay>>,
@@ -1526,7 +1528,7 @@ fn update_match_setup(
         mut shot_presentation,
         mut camera_aim_reset,
     ) = world;
-    let (mut meshes, dressing_assets) = dressing_render;
+    let (mut meshes, dressing_assets, terrain_textures, mut materials) = dressing_render;
     let (presentation, icons) = presentation_assets;
     let transition_start = gate.started && session.phase == SessionPhase::Transition;
     if gate.started && !transition_start {
@@ -1719,7 +1721,15 @@ fn update_match_setup(
                 BattlefieldSeed(derived_seed(selected_round_seed, "terrain")),
                 configuration.0.environment.palette(),
             )))),
-            MeshMaterial3d(dressing_assets.horizon_material.clone()),
+            MeshMaterial3d(materials.add(StandardMaterial {
+                base_color: Color::WHITE,
+                base_color_texture: terrain_texture_for(
+                    configuration.0.environment.palette(),
+                    &terrain_textures,
+                ),
+                perceptual_roughness: 0.88,
+                ..default()
+            })),
         ));
         spawn_buildings(
             &mut commands,
@@ -4766,6 +4776,7 @@ fn create_horizon_mesh(horizon: &VisualHorizon) -> Mesh {
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, horizon.positions().to_vec())
     .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, horizon.colours().to_vec())
+    .with_inserted_attribute(Mesh::ATTRIBUTE_UV_0, horizon.mesh_uvs())
     .with_inserted_indices(Indices::U32(horizon.indices().to_vec()))
     .with_computed_smooth_normals()
 }
@@ -4783,6 +4794,23 @@ fn sky_colour_for(profile: SkyProfile) -> Color {
     }
 }
 
+/// Fog lets the render-only horizon recede into each environment's sky, avoiding a visible
+/// tiled plane while preserving crisp terrain and tank presentation inside the combat arena.
+fn distance_fog_for(profile: SkyProfile) -> DistanceFog {
+    let (start, end) = match profile {
+        SkyProfile::Clear => (72.0, 190.0),
+        SkyProfile::MoonStars => (58.0, 150.0),
+        SkyProfile::Storm => (42.0, 135.0),
+        SkyProfile::CrusherHaze => (52.0, 155.0),
+    };
+    DistanceFog {
+        color: sky_colour_for(profile),
+        directional_light_color: Color::NONE,
+        falloff: FogFalloff::Linear { start, end },
+        ..default()
+    }
+}
+
 fn terrain_texture_for(
     palette: PaletteProfile,
     textures: &TerrainTextureAssets,
@@ -4795,6 +4823,17 @@ fn terrain_texture_for(
     }
 }
 
+/// The combat square occupies one tile; the render-only skirt continues that grid into the
+/// distance. Repetition is explicit because Bevy's default image sampler clamps at a texture's
+/// edge, which would otherwise smear a single border texel over the entire background.
+fn load_repeating_terrain_texture(asset_server: &AssetServer, path: &'static str) -> Handle<Image> {
+    asset_server.load_with_settings(path, |settings: &mut ImageLoaderSettings| {
+        let mut sampler = ImageSamplerDescriptor::linear();
+        sampler.set_address_mode(ImageAddressMode::Repeat);
+        settings.sampler = ImageSampler::Descriptor(sampler);
+    })
+}
+
 /// Palette-specific albedos preserve the visual promise of each environment without letting a
 /// green Earth texture bleach Moon or Crusher into the same world.
 fn sync_terrain_textures(
@@ -4804,7 +4843,6 @@ fn sync_terrain_textures(
     textures: Res<TerrainTextureAssets>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     battlefield: Query<&MeshMaterial3d<StandardMaterial>, With<BattlefieldVisual>>,
-    horizon: Query<&MeshMaterial3d<StandardMaterial>, With<HorizonVisual>>,
 ) {
     let palette = configuration.0.environment.palette();
     if !gate.started || current.0 == palette {
@@ -4812,7 +4850,7 @@ fn sync_terrain_textures(
     }
     current.0 = palette;
     let texture = terrain_texture_for(palette, &textures);
-    for handle in battlefield.iter().chain(horizon.iter()) {
+    for handle in &battlefield {
         if let Some(material) = materials.get_mut(&handle.0) {
             material.base_color_texture = texture.clone();
         }
@@ -4821,12 +4859,17 @@ fn sync_terrain_textures(
 
 /// Sky objects are presentation-only. Rebuilding them at the setup boundary keeps Moon's calm,
 /// cloudless night independent from terrain and simulation state.
+#[allow(clippy::type_complexity)]
 fn sync_sky_presentation(
     gate: Res<MatchSetupGate>,
     configuration: Res<PendingMatchConfiguration>,
     mut current: ResMut<SkyPresentation>,
     mut clear_colour: ResMut<ClearColor>,
-    assets: (ResMut<Assets<Mesh>>, ResMut<Assets<StandardMaterial>>),
+    assets: (
+        ResMut<Assets<Mesh>>,
+        ResMut<Assets<StandardMaterial>>,
+        Query<&mut DistanceFog, With<BattlefieldCamera>>,
+    ),
     clouds: Query<Entity, With<CloudVisual>>,
     mut commands: Commands,
 ) {
@@ -4837,12 +4880,15 @@ fn sync_sky_presentation(
     if current.0 == selected {
         return;
     }
+    let (mut meshes, mut materials, mut fog) = assets;
     current.0 = selected;
     clear_colour.0 = sky_colour_for(selected);
+    for mut fog in &mut fog {
+        *fog = distance_fog_for(selected);
+    }
     for entity in &clouds {
         commands.entity(entity).despawn();
     }
-    let (mut meshes, mut materials) = assets;
     spawn_clouds(&mut commands, &mut meshes, &mut materials, selected);
 }
 

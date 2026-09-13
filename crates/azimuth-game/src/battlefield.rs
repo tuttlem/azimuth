@@ -112,6 +112,20 @@ impl VisualHorizon {
         &self.colours
     }
 
+    /// Continues the combat terrain's world-space UV projection over the exterior skirt, so its
+    /// inner perimeter samples the same texels as the playable mesh before fog softens distance.
+    pub fn mesh_uvs(&self) -> Vec<[f32; 2]> {
+        self.positions
+            .iter()
+            .map(|[x, _, z]| {
+                [
+                    (*x + HALF_EXTENT) / (HALF_EXTENT * 2.0),
+                    (*z + HALF_EXTENT) / (HALF_EXTENT * 2.0),
+                ]
+            })
+            .collect()
+    }
+
     pub fn indices(&self) -> &[u32] {
         &self.indices
     }
